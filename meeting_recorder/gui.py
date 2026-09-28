@@ -147,9 +147,37 @@ class App:
 
 
 def main() -> None:
+    _prepare_windowless()
     root = tk.Tk()
+    try:
+        if sys.platform == "win32":
+            root.iconbitmap(default=str(ASSETS / "icon.ico"))
+        else:
+            root.iconphoto(True, tk.PhotoImage(file=str(ASSETS / "icon.png")))
+    except tk.TclError:
+        pass
     App(root)
     root.mainloop()
+
+
+ASSETS = Path(__file__).parent / "assets"
+
+
+def _prepare_windowless() -> None:
+    """Ajustes para cuando se abre desde el acceso directo (pythonw, sin consola)."""
+    if sys.platform == "win32":
+        import ctypes
+
+        # Agrupa la ventana en la barra de tareas con su propio icono (no el de Python).
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MeetingRecorder")
+    if sys.stderr is None or sys.stdout is None:
+        # Sin consola, cualquier print o barra de progreso (p. ej. la descarga
+        # del modelo de Whisper) fallaría: se redirige todo a un log.
+        from .pipeline import meetings_root
+
+        meetings_root().mkdir(parents=True, exist_ok=True)
+        log = open(meetings_root() / "meeting-recorder.log", "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = log
 
 
 if __name__ == "__main__":

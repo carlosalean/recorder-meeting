@@ -24,3 +24,6 @@ meeting-recorder = "meeting_recorder.cli:main"
 
 [tool.setuptools]
 packages = ["meeting_recorder"]
+
+[tool.setuptools.package-data]
+meeting_recorder = ["assets/*"]

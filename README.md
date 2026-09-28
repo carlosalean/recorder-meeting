@@ -86,6 +86,17 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ## Uso
 
+### Acceso directo en Windows (recomendado)
+
+Después de instalar, haz **doble clic en `crear-acceso-directo.bat`** (en la
+carpeta del proyecto). Se crea el icono **«Grabador de reuniones»** en el
+Escritorio y en el menú Inicio; ábrelo como cualquier otro programa (sin
+ventana de consola). Para tenerlo siempre a mano: clic derecho en el icono →
+*Anclar a la barra de tareas*.
+
+Si algo falla estando abierto desde el acceso directo, los mensajes se guardan
+en `~/Reuniones/meeting-recorder.log`.
+
 ### Interfaz gráfica (lo más sencillo)
 
 ```bash
