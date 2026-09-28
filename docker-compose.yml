@@ -1,0 +1,46 @@
+# Seguimiento de reuniones: web (Next.js) + PostgreSQL.
+# Uso:  copia .env.example a .env, rellénalo y ejecuta:  docker compose up -d --build
+# Luego abre http://localhost:3000
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: meetings
+      POSTGRES_USER: meetings
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-meetings}
+      TZ: ${TZ:-Europe/Madrid}
+      PGTZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Solo accesible desde tu PC (para conectarte con DBeaver, pgAdmin…).
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meetings -d meetings"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://meetings:${POSTGRES_PASSWORD:-meetings}@db:5432/meetings
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_WORKSPACE_ID: ${ANTHROPIC_WORKSPACE_ID:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+      REUNIONES_DIR: /reuniones
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      # Carpeta donde la grabadora guarda las reuniones (solo lectura).
+      - ${REUNIONES_DIR:-./reuniones}:/reuniones:ro
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+volumes:
+  pgdata:

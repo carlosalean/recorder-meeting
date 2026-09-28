@@ -5,6 +5,15 @@ Zoom, TeamViewer, Discord, Slack, una llamada de WhatsApp Desktop…), las
 **transcribe en tu PC** y genera con IA (Claude) un **resumen con lo más
 importante, las decisiones y los puntos pendientes**.
 
+El repositorio tiene dos partes que funcionan juntas:
+
+| Parte | Qué hace | Tecnología |
+|---|---|---|
+| **Grabadora** (`meeting_recorder/`) | Graba, transcribe y resume cada reunión en tu PC | Python |
+| **Panel de seguimiento** (`web/`) | Clientes → proyectos → temas → tareas, actualizados automáticamente con cada reunión | Next.js + PostgreSQL en Docker |
+
+➡️ Para el panel, ve directamente a [Panel de seguimiento de proyectos](#-panel-de-seguimiento-de-proyectos-docker).
+
 ## ¿Cómo funciona?
 
 ```
@@ -178,3 +187,102 @@ Estructura:
 | `meeting_recorder/summarize.py` | Prompt y llamada a Claude |
 | `meeting_recorder/pipeline.py` | Orquesta transcripción → resumen y gestiona carpetas |
 | `meeting_recorder/cli.py` / `gui.py` | Interfaces de línea de comandos y gráfica |
+
+---
+
+## 📋 Panel de seguimiento de proyectos (Docker)
+
+Aplicación web para llevar el control de **clientes, proyectos, temas y tareas**
+alimentada por las transcripciones de las reuniones. Cada vez que asignas una
+reunión a un proyecto, Claude compara la transcripción con el estado actual del
+proyecto y:
+
+- crea los **temas** y **tareas** nuevos (con responsable y fecha límite),
+- **actualiza el estado** de las tareas existentes (en progreso, bloqueada,
+  completada, cancelada) y los cambios de responsable o fecha,
+- **cierra** (o reabre) los temas que se dan por resueltos,
+- guarda un **historial** de cada cambio con la cita de la transcripción que lo justifica.
+
+En una sola pantalla (**Panel**) ves todos los proyectos con sus temas y las
+tareas de cada tema, sus responsables, fechas y pendientes, con filtros por
+cliente, proyecto y responsable. Todo se puede corregir a mano.
+
+```
+ Grabadora ──► C:\Users\<tú>\Reuniones\<reunión>\transcripcion.txt
+                        │  (carpeta montada en Docker, solo lectura)
+                        ▼
+ Panel web ── «Asignar a proyecto» ──► Claude analiza ──► temas / tareas / estados actualizados
+```
+
+### Puesta en marcha
+
+Requisitos: [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+
+1. En la carpeta del proyecto, copia el archivo de configuración:
+   ```powershell
+   cd C:\TRABAJO\RECORDER-MEETING
+   copy .env.example .env
+   notepad .env
+   ```
+2. Rellena en `.env`:
+   - `ANTHROPIC_API_KEY`: tu clave de Claude.
+   - `REUNIONES_DIR`: la carpeta de la grabadora, con barras `/`
+     (p. ej. `C:/Users/carlo/Reuniones`).
+   - `TZ`: tu zona horaria (p. ej. `Europe/Madrid`, `America/Bogota`, `America/Mexico_City`).
+3. Arranca todo:
+   ```powershell
+   docker compose up -d --build
+   ```
+4. Abre **http://localhost:3000**.
+
+La base de datos se guarda en un volumen de Docker (`pgdata`), así que los datos
+se conservan aunque pares o actualices los contenedores.
+
+### Uso
+
+1. **Clientes** → crea el cliente.
+2. **Proyectos** → crea el proyecto (la descripción ayuda a la IA a entender el contexto).
+3. Asigna reuniones al proyecto:
+   - **Grabaciones**: lista las reuniones de la grabadora; elige el proyecto y pulsa *Asignar*.
+   - En la página del proyecto: *Desde la grabadora*, o *Pegar o subir una
+     transcripción* (para reuniones grabadas con otra herramienta).
+4. En unos segundos (según la longitud) verás los temas y tareas actualizados.
+   Asigna las reuniones **en orden cronológico** para que los estados evolucionen bien.
+5. **Panel**: la vista general. Puedes cambiar el estado de una tarea directamente
+   desde el desplegable; en la página del proyecto (✎) puedes editar o borrar
+   temas y tareas y añadirlos a mano.
+
+Si el análisis falla (sin conexión, clave incorrecta…), la reunión queda marcada
+con **Error** y un botón **Reintentar**.
+
+### Comandos útiles
+
+```powershell
+docker compose ps                 # estado de los contenedores
+docker compose logs -f web        # ver el log de la aplicación
+docker compose down               # parar (los datos se conservan)
+git pull; docker compose up -d --build   # actualizar a la última versión
+```
+
+La base de datos también es accesible desde tu PC (DBeaver, pgAdmin…) en
+`localhost:5433`, base de datos `meetings`, usuario `meetings`, contraseña la de
+`POSTGRES_PASSWORD` (por defecto `meetings`).
+
+### Desarrollo del panel
+
+```bash
+cd web
+npm install
+docker compose up -d db                     # solo la base de datos
+DATABASE_URL=postgres://meetings:meetings@localhost:5433/meetings REUNIONES_DIR=~/Reuniones npm run dev
+TEST_DATABASE_URL=postgres://...  npm test  # los tests usan (y vacían) esa base de datos
+```
+
+| Archivo | Responsabilidad |
+|---|---|
+| `web/src/lib/migrations.ts` | Esquema de PostgreSQL (se aplica solo al arrancar) |
+| `web/src/lib/analysis.ts` | Prompt y llamada a Claude con salida estructurada |
+| `web/src/lib/tracking.ts` | Aplica el resultado de la IA a temas/tareas y registra el historial |
+| `web/src/lib/recordings.ts` | Lee las carpetas de la grabadora |
+| `web/src/app/actions.ts` | Acciones del servidor (crear, editar, asignar reuniones…) |
+| `web/src/app/**/page.tsx` | Pantallas: panel, proyectos, clientes, grabaciones, reunión |
