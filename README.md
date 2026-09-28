@@ -68,6 +68,14 @@ setx ANTHROPIC_API_KEY "sk-ant-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
+> Si al resumir aparece el error *"This API key is not scoped to a workspace"*,
+> o bien crea la clave dentro de un workspace (Console → Workspaces → tu
+> workspace → API keys), o bien indica el workspace con otra variable:
+>
+> ```powershell
+> setx ANTHROPIC_WORKSPACE_ID "wrkspc_..."
+> ```
+
 ### Notas por sistema operativo
 
 | Sistema | Captura del audio del sistema |

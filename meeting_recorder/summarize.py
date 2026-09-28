@@ -47,6 +47,14 @@ class SummaryError(RuntimeError):
     pass
 
 
+def make_client() -> anthropic.Anthropic:
+    """Cliente de Anthropic. Si la clave no está asociada a un workspace, la
+    API exige indicarlo: se toma de ``ANTHROPIC_WORKSPACE_ID``."""
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+    headers = {"anthropic-workspace-id": workspace} if workspace else None
+    return anthropic.Anthropic(default_headers=headers)
+
+
 def summarize(
     transcript: str,
     title: str = "Resumen de la reunión",
@@ -58,7 +66,7 @@ def summarize(
     if not transcript.strip():
         raise SummaryError("La transcripción está vacía: no hay nada que resumir.")
 
-    client = client or anthropic.Anthropic()
+    client = client or make_client()
     # Streaming: las reuniones largas generan entradas grandes y evita timeouts.
     with client.beta.messages.stream(
         model=model,

@@ -166,3 +166,11 @@ def test_recorder_records_and_mixes_sources(tmp_path: Path, monkeypatch):
     assert len(data) >= sr  # al menos ~1 s grabado
     assert np.median(data) == pytest.approx(0.3, abs=1e-3)
     assert not list(tmp_path.glob("_*.wav"))  # pistas temporales borradas
+
+
+def test_make_client_sends_workspace_header(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_123")
+    assert summarize.make_client().default_headers["anthropic-workspace-id"] == "wrkspc_123"
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID")
+    assert "anthropic-workspace-id" not in summarize.make_client().default_headers
