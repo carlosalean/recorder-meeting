@@ -10,6 +10,7 @@ import {
 } from "@/lib/status";
 import { applyParticipants, createPerson, mergePeople } from "@/lib/people";
 import { logChange, processMeeting, validDate } from "@/lib/tracking";
+import { createMeetingsFromRecording, scanRecordings, triageRecording, type Suggestion } from "@/lib/triage";
 import type { PoolClient } from "pg";
 
 export type FormState = { error?: string; ok?: number } | undefined;
@@ -393,4 +394,41 @@ export async function unifyPeople(_: FormState, fd: FormData): Promise<FormState
   });
   if (res?.error) return res;
   redirect(`/personas?id=${main}`);
+}
+
+// --------------------------------------------------------------------------- Asignación automática
+
+/** Pide a la IA que clasifique una grabación (y la asigne si lo tiene claro). */
+export async function autoAssignRecording(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const folder = required(fd, "folder", "La grabación");
+    await query(
+      `INSERT INTO recording_triage (folder, status) VALUES ($1, 'clasificando')
+       ON CONFLICT (folder) DO UPDATE SET status = 'clasificando', error = NULL, updated_at = now()`, [folder]);
+    after(() => triageRecording(folder));
+  });
+}
+
+/** Clasifica todas las grabaciones pendientes (incluidas las que dieron error). */
+export async function autoAssignAll(_: FormState): Promise<FormState> {
+  return run(async () => {
+    after(() => scanRecordings({ retryErrors: true }));
+  });
+}
+
+/** Confirma una o varias de las sugerencias de la IA para una grabación dudosa. */
+export async function confirmTriage(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const folder = required(fd, "folder", "La grabación");
+    const chosen = fd.getAll("project_id").map(String).filter((x) => /^\d+$/.test(x));
+    if (!chosen.length) throw new UserError("Marca al menos un proyecto");
+    const t = await one<{ suggestions: Suggestion[] }>(
+      "SELECT suggestions FROM recording_triage WHERE folder = $1", [folder]);
+    const scopes = new Map((t?.suggestions ?? []).map((s) => [s.project_id, s.scope]));
+    await query("UPDATE recording_triage SET status = 'asignada', updated_at = now() WHERE folder = $1", [folder]);
+    const ids = await createMeetingsFromRecording(folder, chosen.map((id) => ({ project_id: id, scope: scopes.get(id) })));
+    after(async () => {
+      for (const id of ids) await processMeeting(id);
+    });
+  });
 }

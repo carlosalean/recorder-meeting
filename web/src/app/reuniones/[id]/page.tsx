@@ -35,6 +35,10 @@ export default async function MeetingPage({ params }: PageProps<"/reuniones/[id]
         </ActionForm>
       </div>
 
+      {m.scope_note && (
+        <div className="card alert info small">🔀 {m.scope_note}</div>
+      )}
+
       {m.status === "error" && (
         <div className="card alert">
           <p><strong>No se pudo procesar:</strong> {m.error}</p>

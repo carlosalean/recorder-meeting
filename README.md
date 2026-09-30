@@ -247,7 +247,19 @@ se conservan aunque pares o actualices los contenedores.
 
 1. **Clientes** → crea el cliente.
 2. **Proyectos** → crea el proyecto (la descripción ayuda a la IA a entender el contexto).
-3. Asigna reuniones al proyecto:
+3. **Asignación automática**: cada pocos minutos (`AUTO_ASSIGN_MINUTES`, 5 por
+   defecto) la IA revisa la carpeta de la grabadora y compara cada grabación
+   nueva con tus proyectos (cliente, descripción, temas abiertos y personas):
+   - Si lo tiene **claro**, la asigna y la procesa sola.
+   - Si la reunión trató **varios proyectos**, crea una reunión en cada uno y
+     cada proyecto solo recibe su parte de la conversación.
+   - Si **duda**, en **Grabaciones** verás su propuesta (con el motivo) para
+     confirmarla con un clic.
+   - Si no encaja con ninguno (o parece un proyecto nuevo), te lo indica; cuando
+     crees el proyecto, lo vuelve a intentar.
+
+   También puedes lanzarla al momento con «Clasificar pendientes con IA», o
+   asignar reuniones a mano:
    - **Grabaciones**: lista las reuniones de la grabadora; elige el proyecto y pulsa *Asignar*.
    - En la página del proyecto: *Desde la grabadora*, o *Pegar o subir una
      transcripción* (para reuniones grabadas con otra herramienta).
@@ -315,6 +327,7 @@ TEST_DATABASE_URL=postgres://...  npm test  # los tests usan (y vacían) esa bas
 | `web/src/lib/migrations.ts` | Esquema de PostgreSQL (se aplica solo al arrancar) |
 | `web/src/lib/analysis.ts` | Prompt y llamada a Claude con salida estructurada |
 | `web/src/lib/tracking.ts` | Aplica el resultado de la IA a temas/tareas y registra el historial |
+| `web/src/lib/triage.ts` | Asignación automática de grabaciones a proyectos |
 | `web/src/lib/people.ts` | Alta, actualización y resolución de personas (responsables, participantes) |
 | `web/src/lib/recordings.ts` | Lee las carpetas de la grabadora |
 | `web/src/app/actions.ts` | Acciones del servidor (crear, editar, asignar reuniones…) |

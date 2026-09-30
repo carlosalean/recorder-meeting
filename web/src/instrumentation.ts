@@ -7,12 +7,17 @@ export async function register() {
   for (let attempt = 1; attempt <= 30; attempt++) {
     try {
       await ensureSchema();
-      return;
+      break;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn(`[db] base de datos no disponible (intento ${attempt}/30): ${msg}`);
+      if (attempt === 30) {
+        console.error("[db] no se pudo preparar la base de datos; se reintentará en la próxima petición");
+      }
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
-  console.error("[db] no se pudo preparar la base de datos; se reintentará en la próxima petición");
+  // Clasificación y asignación automática de las grabaciones nuevas.
+  const { startAutoAssign } = await import("./lib/triage");
+  startAutoAssign();
 }

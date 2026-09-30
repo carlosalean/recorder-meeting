@@ -204,43 +204,27 @@ export function anthropicClient(): Anthropic {
   });
 }
 
-export async function analyzeMeeting(
-  ctx: ProjectContext,
-  meeting: {
-    title: string;
-    date: string;
-    transcript: string;
-    recorderSummary?: string | null;
-    participantsHint?: string | null;
-  },
-  client: Anthropic = anthropicClient(),
-): Promise<Analysis> {
+/** Llamada a Claude con salida estructurada validada contra un esquema Zod. */
+export async function askStructured<S extends z.ZodType>(
+  schema: S,
+  system: string,
+  user: string,
+  opts: { effort?: "low" | "medium" | "high"; maxTokens?: number; client?: Anthropic } = {},
+): Promise<z.infer<S>> {
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
     throw new AnalysisError("Falta ANTHROPIC_API_KEY en el archivo .env");
   }
-  const user = [
-    renderContext(ctx),
-    "",
-    `NUEVA REUNIÓN: "${meeting.title}" — fecha: ${meeting.date}`,
-    meeting.participantsHint
-      ? `\nPARTICIPANTES INDICADOS POR EL USUARIO:\n${meeting.participantsHint}`
-      : "\nParticipantes: no indicados; dedúcelos de la conversación.",
-    meeting.recorderSummary
-      ? `\n<resumen_previo>\n${meeting.recorderSummary}\n</resumen_previo>`
-      : "",
-    `\n<transcripcion>\n${meeting.transcript}\n</transcripcion>`,
-  ].join("\n");
-
+  const client = opts.client ?? anthropicClient();
   // Streaming: las transcripciones largas generan peticiones largas y así se evitan timeouts.
   const stream = client.beta.messages.stream({
     model: MODEL,
-    max_tokens: 64000,
+    max_tokens: opts.maxTokens ?? 64000,
     thinking: { type: "adaptive" },
-    output_config: { effort: "high", format: betaZodOutputFormat(AnalysisSchema) },
+    output_config: { effort: opts.effort ?? "high", format: betaZodOutputFormat(schema) },
     // Si un filtro de seguridad rechaza la petición por error, la API reintenta con otro modelo.
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
-    system: SYSTEM,
+    system,
     messages: [{ role: "user", content: user }],
   });
   const message = await stream.finalMessage();
@@ -254,5 +238,33 @@ export async function analyzeMeeting(
   if (!message.parsed_output) {
     throw new AnalysisError("El modelo no devolvió un resultado válido.");
   }
-  return message.parsed_output;
+  return message.parsed_output as z.infer<S>;
+}
+
+export async function analyzeMeeting(
+  ctx: ProjectContext,
+  meeting: {
+    title: string;
+    date: string;
+    transcript: string;
+    recorderSummary?: string | null;
+    participantsHint?: string | null;
+    scopeNote?: string | null;
+  },
+  client: Anthropic = anthropicClient(),
+): Promise<Analysis> {
+  const user = [
+    renderContext(ctx),
+    "",
+    `NUEVA REUNIÓN: "${meeting.title}" — fecha: ${meeting.date}`,
+    meeting.scopeNote ? `\nIMPORTANTE — ALCANCE: ${meeting.scopeNote}` : "",
+    meeting.participantsHint
+      ? `\nPARTICIPANTES INDICADOS POR EL USUARIO:\n${meeting.participantsHint}`
+      : "\nParticipantes: no indicados; dedúcelos de la conversación.",
+    meeting.recorderSummary
+      ? `\n<resumen_previo>\n${meeting.recorderSummary}\n</resumen_previo>`
+      : "",
+    `\n<transcripcion>\n${meeting.transcript}\n</transcripcion>`,
+  ].join("\n");
+  return askStructured(AnalysisSchema, SYSTEM, user, { client });
 }

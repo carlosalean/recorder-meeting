@@ -38,6 +38,7 @@ services:
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
       OWNER_NAME: ${OWNER_NAME:-}
       OWNER_ROLE: ${OWNER_ROLE:-}
+      AUTO_ASSIGN_MINUTES: ${AUTO_ASSIGN_MINUTES:-5}
       REUNIONES_DIR: /reuniones
       TZ: ${TZ:-Europe/Madrid}
     volumes:

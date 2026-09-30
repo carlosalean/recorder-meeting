@@ -325,3 +325,16 @@ table.list td.actions { text-align: right; width: 1%; }
 .choices { font-size: 11.5px; color: var(--muted); }
 @media (max-width: 1000px) { .two-col.equal { grid-template-columns: 1fr; } }
 .compare-wrap { overflow-x: auto; }
+
+/* ---------- Asignación automática ---------- */
+.recordings td.triage-cell { min-width: 340px; }
+.triage { display: flex; flex-direction: column; gap: 6px; }
+.triage-summary { margin-top: 4px; color: var(--muted); font-style: italic; }
+.suggestion { align-items: flex-start; }
+.suggestion input { margin-top: 3px; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.conf-alta { background: var(--ok-soft); color: var(--ok); }
+.pill.conf-media { background: var(--warn-soft); color: var(--warn); }
+.pill.conf-baja { background: var(--surface-2); color: var(--muted); }
+details.manual { margin-top: 8px; padding-top: 6px; }
+.assigned { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }

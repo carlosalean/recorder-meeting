@@ -1,29 +1,54 @@
 import Link from "next/link";
-import { importRecording } from "@/app/actions";
+import { autoAssignAll, autoAssignRecording, confirmTriage, importRecording } from "@/app/actions";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { ActionForm, Submit } from "@/components/forms";
-import { Empty, fmtDateTime } from "@/components/ui";
-import { importedFolders, listPeople, listProjects, processingCount } from "@/lib/queries";
 import { ParticipantsPicker } from "@/components/participants";
+import { Empty, fmtDateTime } from "@/components/ui";
+import { query } from "@/lib/db";
+import { importedFolders, listPeople, listProjects, processingCount } from "@/lib/queries";
 import { listRecordings } from "@/lib/recordings";
+import { type Suggestion, isScanning } from "@/lib/triage";
+
+type TriageRow = {
+  folder: string; status: string; suggestions: Suggestion[]; summary: string | null; error: string | null;
+  new_project: { cliente: string; nombre: string; descripcion: string } | null;
+};
+
+const CONF_LABEL: Record<string, string> = { alta: "Seguro", media: "Probable", baja: "Posible" };
 
 export default async function RecordingsPage() {
-  const [recordings, imported, projects, processing, people] = await Promise.all([
-    listRecordings(), importedFolders(), listProjects({ status: "activo" }), processingCount(), listPeople(),
+  const [recordings, imported, projects, processing, people, triage] = await Promise.all([
+    listRecordings(), importedFolders(), listProjects(), processingCount(), listPeople(),
+    query<TriageRow>("SELECT * FROM recording_triage"),
   ]);
+  const active = projects.filter((p) => p.status !== "cerrado");
+  const projectName = new Map(projects.map((p) => [p.id, `${p.client_name} · ${p.name}`]));
   const pickable = people.map((p) => ({ id: p.id, name: p.name, company: p.company }));
-  const byFolder = new Map(imported.map((i) => [i.source_path, i]));
+  const byFolder = new Map<string, typeof imported>();
+  for (const i of imported) byFolder.set(i.source_path, [...(byFolder.get(i.source_path) ?? []), i]);
+  const triageBy = new Map(triage.map((t) => [t.folder, t]));
+  const pending = recordings.items.filter((r) => !byFolder.has(r.folder));
+  const classifying = triage.some((t) => t.status === "clasificando") || isScanning();
+  const autoMinutes = Number(process.env.AUTO_ASSIGN_MINUTES ?? "5");
 
   return (
     <>
-      <AutoRefresh active={processing > 0} />
+      <AutoRefresh active={processing > 0 || classifying} />
       <div className="page-head">
-        <h1>Grabaciones</h1>
+        <div>
+          <h1>Grabaciones</h1>
+          <p className="muted">
+            La IA identifica a qué proyecto pertenece cada grabación y, si lo tiene claro, la asigna y la procesa
+            sola{autoMinutes > 0 ? ` (revisa la carpeta cada ${autoMinutes} min)` : ""}. Si duda, te propone
+            el proyecto para que lo confirmes. También puedes asignarlas a mano.
+          </p>
+        </div>
+        {pending.length > 0 && active.length > 0 && (
+          <ActionForm action={autoAssignAll}>
+            <Submit pendingText="Enviando…">🤖 Clasificar pendientes con IA ({pending.length})</Submit>
+          </ActionForm>
+        )}
       </div>
-      <p className="muted">
-        Reuniones grabadas con la aplicación <em>meeting-recorder</em>. Asigna cada una a su proyecto y la IA
-        actualizará los temas y tareas.
-      </p>
 
       {!recordings.available ? (
         <Empty>
@@ -33,40 +58,55 @@ export default async function RecordingsPage() {
       ) : recordings.items.length === 0 ? (
         <Empty>No hay grabaciones con transcripción todavía.</Empty>
       ) : (
-        <div className="table-wrap card"><table className="list">
+        <div className="table-wrap card"><table className="list recordings">
           <thead>
-            <tr><th>Fecha</th><th>Grabación</th><th>Archivos</th><th>Proyecto</th></tr>
+            <tr><th>Fecha</th><th>Grabación</th><th>Proyecto</th></tr>
           </thead>
           <tbody>
             {recordings.items.map((r) => {
               const done = byFolder.get(r.folder);
+              const t = triageBy.get(r.folder);
               return (
                 <tr key={r.folder}>
                   <td className="nowrap">{fmtDateTime(r.date)}</td>
-                  <td><strong>{r.title}</strong><div className="muted small">{r.folder}</div></td>
-                  <td className="small">
-                    {r.audio ? "🎧 audio · " : ""}📝 transcripción{r.hasSummary ? " · 📋 resumen" : ""}
-                  </td>
                   <td>
+                    <strong>{r.title}</strong>
+                    <div className="muted small">
+                      {r.audio ? "🎧 audio · " : ""}📝 transcripción{r.hasSummary ? " · 📋 resumen" : ""}
+                    </div>
+                    {t?.summary && <div className="small triage-summary">{t.summary}</div>}
+                  </td>
+                  <td className="triage-cell">
                     {done ? (
-                      <>
-                        <Link href={`/proyectos/${done.project_id}`}>{done.project_name}</Link>{" · "}
-                        <Link href={`/reuniones/${done.id}`}>ver reunión</Link>
-                      </>
-                    ) : projects.length === 0 ? (
+                      <div className="assigned">
+                        {t?.status === "asignada" && <span className="pill ok">🤖 Clasificada con IA</span>}
+                        {done.map((d) => (
+                          <div key={d.id}>
+                            <Link href={`/proyectos/${d.project_id}`}>{projectName.get(d.project_id) ?? d.project_name}</Link>
+                            {" · "}<Link href={`/reuniones/${d.id}`}>ver reunión</Link>
+                          </div>
+                        ))}
+                      </div>
+                    ) : active.length === 0 ? (
                       <span className="muted small">Crea antes un <Link href="/proyectos">proyecto</Link></span>
                     ) : (
-                      <ActionForm action={importRecording} className="inline-form">
-                        <input type="hidden" name="folder" value={r.folder} />
-                        <select name="project_id" required defaultValue="">
-                          <option value="" disabled>Asignar a…</option>
-                          {projects.map((p) => (
-                            <option key={p.id} value={p.id}>{p.client_name} · {p.name}</option>
-                          ))}
-                        </select>
-                        <Submit pendingText="Enviando…">Asignar</Submit>
-                        <ParticipantsPicker people={pickable} />
-                      </ActionForm>
+                      <>
+                        <TriageState t={t} folder={r.folder} projectName={projectName} />
+                        <details className="sub manual">
+                          <summary>Asignar a mano</summary>
+                          <ActionForm action={importRecording} className="inline-form">
+                            <input type="hidden" name="folder" value={r.folder} />
+                            <select name="project_id" required defaultValue="">
+                              <option value="" disabled>Asignar a…</option>
+                              {active.map((p) => (
+                                <option key={p.id} value={p.id}>{p.client_name} · {p.name}</option>
+                              ))}
+                            </select>
+                            <Submit pendingText="Enviando…">Asignar</Submit>
+                            <ParticipantsPicker people={pickable} />
+                          </ActionForm>
+                        </details>
+                      </>
                     )}
                   </td>
                 </tr>
@@ -76,5 +116,64 @@ export default async function RecordingsPage() {
         </table></div>
       )}
     </>
+  );
+}
+
+function TriageState({ t, folder, projectName }: {
+  t: TriageRow | undefined; folder: string; projectName: Map<string, string>;
+}) {
+  const retry = (label: string) => (
+    <ActionForm action={autoAssignRecording}>
+      <input type="hidden" name="folder" value={folder} />
+      <Submit className="btn small" pendingText="Enviando…">{label}</Submit>
+    </ActionForm>
+  );
+  if (!t) {
+    return <div className="triage">{retry("🤖 Asignar con IA")}</div>;
+  }
+  if (t.status === "clasificando") {
+    return <div className="triage"><span className="pill processing">⏳ La IA está clasificando…</span></div>;
+  }
+  if (t.status === "error") {
+    return (
+      <div className="triage">
+        <p className="form-error small">No se pudo clasificar: {t.error}</p>
+        {retry("Reintentar")}
+      </div>
+    );
+  }
+  if (t.status === "dudosa") {
+    return (
+      <div className="triage">
+        <div className="small"><strong>🤔 La IA no está segura.</strong> Marca el proyecto correcto:</div>
+        <ActionForm action={confirmTriage} className="stack">
+          <input type="hidden" name="folder" value={folder} />
+          {t.suggestions.map((s, i) => (
+            <label key={s.project_id} className="check suggestion">
+              <input type="checkbox" name="project_id" value={s.project_id} defaultChecked={i === 0} />
+              <span>
+                <strong>{projectName.get(s.project_id) ?? `Proyecto ${s.project_id}`}</strong>{" "}
+                <span className={`pill conf-${s.confidence}`}>{CONF_LABEL[s.confidence] ?? s.confidence}</span>
+                <span className="muted small"> — {s.reason}</span>
+              </span>
+            </label>
+          ))}
+          <div><Submit className="btn small primary" pendingText="Enviando…">Confirmar y procesar</Submit></div>
+        </ActionForm>
+      </div>
+    );
+  }
+  // sin_proyecto (o asignada pero ya sin reuniones)
+  return (
+    <div className="triage">
+      <div className="small"><strong>No encaja con ningún proyecto.</strong></div>
+      {t.new_project && (
+        <div className="small">
+          Parece un proyecto nuevo: <strong>{t.new_project.nombre}</strong> (cliente {t.new_project.cliente}).{" "}
+          <Link href="/proyectos">Créalo</Link> y vuelve a pedir la asignación.
+        </div>
+      )}
+      {retry("Volver a clasificar")}
+    </div>
   );
 }

@@ -170,6 +170,27 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       CREATE INDEX ON people (reports_to_id);
     `,
   },
+  {
+    id: "004_asignacion_automatica",
+    sql: `
+      -- Una grabación puede tratar varios proyectos: una reunión por proyecto.
+      ALTER TABLE meetings DROP CONSTRAINT meetings_source_path_key;
+      ALTER TABLE meetings ADD CONSTRAINT meetings_source_project_key UNIQUE (source_path, project_id);
+      -- Qué parte de la conversación corresponde a este proyecto (si la reunión trató varios).
+      ALTER TABLE meetings ADD COLUMN scope_note text;
+
+      -- Resultado de la clasificación automática de cada grabación.
+      CREATE TABLE recording_triage (
+        folder      text PRIMARY KEY,
+        status      text NOT NULL CHECK (status IN ('clasificando', 'asignada', 'dudosa', 'sin_proyecto', 'error')),
+        suggestions jsonb NOT NULL DEFAULT '[]',  -- [{project_id, confidence, reason, scope}]
+        new_project jsonb,                        -- {client, name, description} si parece un proyecto nuevo
+        summary     text,                         -- de qué trata la reunión, en una frase
+        error       text,
+        updated_at  timestamptz NOT NULL DEFAULT now()
+      );
+    `,
+  },
 ];
 
 export async function migrate(): Promise<void> {
@@ -199,6 +220,10 @@ export async function migrate(): Promise<void> {
     await client.query(
       `UPDATE meetings SET status = 'error', error = 'Procesamiento interrumpido (el servidor se reinició). Pulsa reintentar.'
        WHERE status = 'procesando'`,
+    );
+    await client.query(
+      `UPDATE recording_triage SET status = 'error', error = 'Clasificación interrumpida (el servidor se reinició).'
+       WHERE status = 'clasificando'`,
     );
   } finally {
     await client.query("SELECT pg_advisory_unlock(727274)").catch(() => {});

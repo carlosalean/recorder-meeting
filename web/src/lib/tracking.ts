@@ -261,10 +261,10 @@ export async function processMeeting(meetingId: number): Promise<void> {
   try {
     const m = await one<{
       project_id: string; title: string; date: string; transcript: string; recorder_summary: string | null;
-      participants_hint: string | null;
+      participants_hint: string | null; scope_note: string | null;
     }>(
       `SELECT project_id, title, to_char(meeting_date, 'YYYY-MM-DD') AS date, transcript, recorder_summary,
-              participants_hint
+              participants_hint, scope_note
        FROM meetings WHERE id = $1`,
       [meetingId],
     );
@@ -275,7 +275,7 @@ export async function processMeeting(meetingId: number): Promise<void> {
     const ctx = await loadProjectContext(projectId, pool());
     const analysis = await analyzeMeeting(ctx, {
       title: m.title, date: m.date, transcript: m.transcript, recorderSummary: m.recorder_summary,
-      participantsHint: m.participants_hint,
+      participantsHint: m.participants_hint, scopeNote: m.scope_note,
     });
 
     await tx(async (db) => {

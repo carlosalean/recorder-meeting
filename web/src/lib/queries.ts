@@ -108,7 +108,7 @@ export const listMeetings = (projectId: string) =>
 
 export const getMeeting = (id: string) =>
   one<Meeting & { transcript: string; recorder_summary: string | null; ai_summary: string | null;
-    project_name: string; client_name: string }>(
+    project_name: string; client_name: string; scope_note: string | null }>(
     `SELECT m.*, p.name AS project_name, c.name AS client_name,
        (SELECT count(*)::int FROM changes x WHERE x.meeting_id = m.id) AS changes
      FROM meetings m JOIN projects p ON p.id = m.project_id JOIN clients c ON c.id = p.client_id
