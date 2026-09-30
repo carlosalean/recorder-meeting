@@ -16,7 +16,7 @@ export type Topic = {
 };
 export type Task = {
   id: string; topic_id: string; title: string; description: string | null; owner: string | null;
-  due_date: string | null; status: string; updated_at: Date; closed_at: Date | null;
+  owner_person_id: string | null; due_date: string | null; status: string; updated_at: Date; closed_at: Date | null;
   last_meeting_id: string | null; last_meeting_title: string | null; overdue: boolean;
 };
 export type Meeting = {
@@ -59,13 +59,16 @@ export const listProjects = (filter: { clientId?: string; status?: string } = {}
   );
 };
 
-export const getProject = (id: string) => one<Project>(`${PROJECT_SELECT} WHERE p.id = $1`, [id]);
+export const getProject = (id: string) =>
+  one<Project & { ai_summary: string | null }>(`${PROJECT_SELECT} WHERE p.id = $1`, [id]);
 
 const TASK_SELECT = `
-  SELECT k.id, k.topic_id, k.title, k.description, k.owner, to_char(k.due_date, 'YYYY-MM-DD') AS due_date,
+  SELECT k.id, k.topic_id, k.title, k.description, COALESCE(op.name, k.owner) AS owner, k.owner_person_id,
+    to_char(k.due_date, 'YYYY-MM-DD') AS due_date,
     k.status, k.updated_at, k.closed_at, k.last_meeting_id, m.title AS last_meeting_title,
     (k.due_date < current_date AND k.status NOT IN ('completada','cancelada')) AS overdue
-  FROM tasks k JOIN topics t ON t.id = k.topic_id LEFT JOIN meetings m ON m.id = k.last_meeting_id`;
+  FROM tasks k JOIN topics t ON t.id = k.topic_id LEFT JOIN meetings m ON m.id = k.last_meeting_id
+    LEFT JOIN people op ON op.id = k.owner_person_id`;
 
 const TASK_ORDER = `ORDER BY k.status IN ('completada','cancelada'), k.due_date NULLS LAST, k.id`;
 
@@ -80,7 +83,7 @@ export async function getBoard(projectIds: string[], opts: { onlyOpen: boolean; 
   const where = ["t.project_id = ANY($1::bigint[])"];
   const params: unknown[] = [projectIds];
   if (opts.onlyOpen) where.push("k.status NOT IN ('completada','cancelada')");
-  if (opts.owner) where.push(`k.owner ILIKE $${params.push(opts.owner)}`);
+  if (opts.owner) where.push(`COALESCE(op.name, k.owner) ILIKE $${params.push(opts.owner)}`);
   if (opts.q) {
     const p = params.push(`%${opts.q}%`);
     where.push(`(k.title ILIKE $${p} OR k.description ILIKE $${p} OR t.title ILIKE $${p})`);
@@ -91,7 +94,8 @@ export async function getBoard(projectIds: string[], opts: { onlyOpen: boolean; 
 
 export const listOwners = () =>
   query<{ owner: string }>(
-    `SELECT DISTINCT owner FROM tasks WHERE owner IS NOT NULL AND owner <> '' ORDER BY owner`,
+    `SELECT DISTINCT COALESCE(p.name, k.owner) AS owner FROM tasks k LEFT JOIN people p ON p.id = k.owner_person_id
+     WHERE COALESCE(p.name, k.owner) <> '' ORDER BY 1`,
   ).then((r) => r.map((x) => x.owner));
 
 export const listMeetings = (projectId: string) =>
@@ -133,3 +137,77 @@ export const importedFolders = () =>
 
 export const processingCount = () =>
   one<{ n: number }>("SELECT count(*)::int AS n FROM meetings WHERE status = 'procesando'").then((r) => r?.n ?? 0);
+
+// --------------------------------------------------------------------------- Personas
+
+export type PersonRow = {
+  id: string; name: string; company: string | null; job_title: string | null; email: string | null;
+  phone: string | null; notes: string | null; ai_profile: string | null; updated_at: Date;
+  project_count: number; open_tasks: number; last_meeting: Date | null;
+};
+
+const PERSON_SELECT = `
+  SELECT p.*,
+    (SELECT count(*)::int FROM project_people pp WHERE pp.person_id = p.id) AS project_count,
+    (SELECT count(*)::int FROM tasks k WHERE k.owner_person_id = p.id
+       AND k.status NOT IN ('completada','cancelada')) AS open_tasks,
+    (SELECT max(m.meeting_date) FROM meeting_people mp JOIN meetings m ON m.id = mp.meeting_id
+       WHERE mp.person_id = p.id) AS last_meeting
+  FROM people p`;
+
+export const listPeople = () =>
+  query<PersonRow>(`${PERSON_SELECT} ORDER BY lower(coalesce(p.company, 'zzz')), lower(p.name)`);
+
+export const getPerson = (id: string) => one<PersonRow>(`${PERSON_SELECT} WHERE p.id = $1`, [id]);
+
+export type PersonProject = {
+  project_id: string; project_name: string; project_status: string; description: string | null;
+  ai_summary: string | null; client_name: string; role: string | null; summary: string | null;
+};
+
+export const personProjects = (personId: string) =>
+  query<PersonProject>(
+    `SELECT pr.id AS project_id, pr.name AS project_name, pr.status AS project_status, pr.description,
+            pr.ai_summary, c.name AS client_name, pp.role, pp.summary
+     FROM project_people pp JOIN projects pr ON pr.id = pp.project_id JOIN clients c ON c.id = pr.client_id
+     WHERE pp.person_id = $1 ORDER BY pr.status = 'cerrado', pr.updated_at DESC`,
+    [personId],
+  );
+
+export const personTasks = (personId: string) =>
+  query<Task & { project_id: string; topic_title: string }>(
+    `${TASK_SELECT.replace("SELECT k.id,", "SELECT t.project_id, t.title AS topic_title, k.id,")}
+     WHERE k.owner_person_id = $1 ${TASK_ORDER}`,
+    [personId],
+  );
+
+export const personMeetings = (personId: string) =>
+  query<{ id: string; title: string; meeting_date: Date; project_id: string; project_name: string }>(
+    `SELECT m.id, m.title, m.meeting_date, m.project_id, pr.name AS project_name
+     FROM meeting_people mp JOIN meetings m ON m.id = mp.meeting_id JOIN projects pr ON pr.id = m.project_id
+     WHERE mp.person_id = $1 ORDER BY m.meeting_date DESC LIMIT 50`,
+    [personId],
+  );
+
+export type ProjectPerson = {
+  id: string; name: string; company: string | null; job_title: string | null; role: string | null;
+  summary: string | null; open_tasks: number;
+};
+
+export const projectPeople = (projectId: string) =>
+  query<ProjectPerson>(
+    `SELECT p.id, p.name, p.company, p.job_title, pp.role, pp.summary,
+       (SELECT count(*)::int FROM tasks k JOIN topics t ON t.id = k.topic_id
+         WHERE k.owner_person_id = p.id AND t.project_id = $1
+           AND k.status NOT IN ('completada','cancelada')) AS open_tasks
+     FROM project_people pp JOIN people p ON p.id = pp.person_id
+     WHERE pp.project_id = $1 ORDER BY open_tasks DESC, lower(p.name)`,
+    [projectId],
+  );
+
+export const meetingPeople = (meetingId: string) =>
+  query<{ id: string; name: string; company: string | null; job_title: string | null }>(
+    `SELECT p.id, p.name, p.company, p.job_title FROM meeting_people mp JOIN people p ON p.id = mp.person_id
+     WHERE mp.meeting_id = $1 ORDER BY lower(p.name)`,
+    [meetingId],
+  );

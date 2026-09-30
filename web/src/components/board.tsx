@@ -121,7 +121,10 @@ function TaskRow({ task: t, editable }: { task: Task; editable: boolean }) {
         <div className="task-title">{t.title}</div>
         {t.description && <div className="muted small">{t.description}</div>}
       </td>
-      <td data-label="Responsable">{t.owner ?? <span className="muted">Sin asignar</span>}</td>
+      <td data-label="Responsable">
+        {t.owner_person_id ? <Link href={`/personas?id=${t.owner_person_id}`}>{t.owner}</Link>
+          : t.owner ?? <span className="muted">Sin asignar</span>}
+      </td>
       <td data-label="Fecha límite" className={t.overdue ? "overdue" : ""}>{fmtDate(t.due_date)}</td>
       <td data-label="Última reunión" className="small">
         {t.last_meeting_id ? (

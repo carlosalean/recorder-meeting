@@ -14,7 +14,14 @@ const { migrate } = await import("./migrations");
 const { applyAnalysis, loadProjectContext, processMeeting } = await import("./tracking");
 const { analyzeMeeting } = await import("./analysis");
 
-const empty: Analysis = { resumen: "", temas_nuevos: [], cambios_temas: [], tareas_nuevas: [], cambios_tareas: [] };
+const empty: Analysis = {
+  resumen: "", resumen_proyecto: "", participantes: [],
+  temas_nuevos: [], cambios_temas: [], tareas_nuevas: [], cambios_tareas: [],
+};
+const persona = (x: Partial<Analysis["participantes"][number]> & { nombre: string }) => ({
+  persona_id: null, empresa: null, cargo: null, email: null, telefono: null, asistio: true,
+  rol_en_proyecto: null, resumen_en_proyecto: "", perfil: null, ...x,
+});
 
 async function seed() {
   const c = await one<{ id: string }>("INSERT INTO clients (name) VALUES ('ACME') RETURNING id");
@@ -25,17 +32,19 @@ async function seed() {
   return { projectId: Number(p!.id), meetingId: Number(m!.id) };
 }
 
+beforeAll(async () => {
+  if (!url) return;
+  await query("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
+  await migrate();
+  await migrate(); // idempotente
+});
+afterAll(async () => {
+  if (url) await pool().end();
+});
+
 describe.skipIf(!url)("seguimiento de temas y tareas", () => {
-  beforeAll(async () => {
-    await query("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
-    await migrate();
-    await migrate(); // idempotente
-  });
   beforeEach(async () => {
     await query("TRUNCATE clients RESTART IDENTITY CASCADE");
-  });
-  afterAll(async () => {
-    await pool().end();
   });
 
   it("crea temas y tareas nuevos y los registra en el historial", async () => {
@@ -58,8 +67,9 @@ describe.skipIf(!url)("seguimiento de temas y tareas", () => {
       { title: "Hacer mockups", owner: "Ana", due: "2026-10-03", topic: "Diseño" },
       { title: "Sin tema", owner: null, due: null, topic: "General" }, // fecha no válida → null
     ]);
-    const changes = await query("SELECT * FROM changes WHERE meeting_id = $1", [meetingId]);
-    expect(changes).toHaveLength(4);
+    const changes = await query<{ entity: string }>("SELECT entity FROM changes WHERE meeting_id = $1", [meetingId]);
+    // 2 temas + 2 tareas + la persona "Ana" (responsable nueva)
+    expect(changes.map((c) => c.entity).sort()).toEqual(["persona", "tarea", "tarea", "tema", "tema"]);
   });
 
   it("actualiza estados, responsables y cierra temas en reuniones posteriores", async () => {
@@ -115,6 +125,71 @@ describe.skipIf(!url)("seguimiento de temas y tareas", () => {
     await processMeeting(meetingId);
     expect(await one("SELECT status, error FROM meetings WHERE id=$1", [meetingId]))
       .toEqual({ status: "error", error: "sin red" });
+  });
+});
+
+describe.skipIf(!url)("personas", () => {
+  beforeEach(async () => {
+    await query("TRUNCATE clients, people RESTART IDENTITY CASCADE");
+  });
+
+  it("crea personas, las vincula al proyecto y a la reunión y asigna responsables", async () => {
+    const { projectId, meetingId } = await seed();
+    const res = await tx((db) => applyAnalysis(db, projectId, meetingId, {
+      ...empty,
+      resumen_proyecto: "Rediseño de la web corporativa de ACME.",
+      participantes: [
+        persona({ nombre: "Ana García", empresa: "ACME", cargo: "Product Owner", email: "ana@acme.com",
+          rol_en_proyecto: "PO del cliente", resumen_en_proyecto: "Valida el diseño", perfil: "PO de ACME" }),
+        persona({ nombre: "Luis", asistio: false, resumen_en_proyecto: "Gestiona el hosting" }),
+      ],
+      temas_nuevos: [{ clave: "N1", titulo: "Diseño", descripcion: "" }],
+      tareas_nuevas: [
+        // "ana" (nombre de pila, sin tilde ni mayúscula) debe resolverse a Ana García.
+        { tema_id: null, tema_clave: "N1", titulo: "Validar mockups", descripcion: "", responsable: "ana",
+          fecha_limite: null, estado: "pendiente", evidencia: "" },
+        // Un responsable que no está en participantes se crea.
+        { tema_id: null, tema_clave: "N1", titulo: "Textos", descripcion: "", responsable: "María",
+          fecha_limite: null, estado: "pendiente", evidencia: "" },
+      ],
+    }));
+    expect(res.newPeople).toBe(3);
+    const people = await query<{ name: string; company: string; email: string; role: string; summary: string }>(
+      `SELECT p.name, p.company, p.email, pp.role, pp.summary FROM people p
+       JOIN project_people pp ON pp.person_id = p.id ORDER BY p.id`);
+    expect(people).toEqual([
+      { name: "Ana García", company: "ACME", email: "ana@acme.com", role: "PO del cliente", summary: "Valida el diseño" },
+      { name: "Luis", company: null, email: null, role: null, summary: "Gestiona el hosting" },
+      { name: "María", company: null, email: null, role: null, summary: null },
+    ]);
+    const attended = await query<{ name: string }>(
+      "SELECT p.name FROM meeting_people mp JOIN people p ON p.id = mp.person_id WHERE mp.meeting_id = $1", [meetingId]);
+    expect(attended.map((x) => x.name)).toEqual(["Ana García"]);
+    const tasks = await query<{ title: string; owner: string; person: string }>(
+      `SELECT k.title, k.owner, p.name AS person FROM tasks k JOIN people p ON p.id = k.owner_person_id ORDER BY k.id`);
+    expect(tasks).toEqual([
+      { title: "Validar mockups", owner: "Ana García", person: "Ana García" },
+      { title: "Textos", owner: "María", person: "María" },
+    ]);
+    expect((await one<{ ai_summary: string }>("SELECT ai_summary FROM projects WHERE id=$1", [projectId]))!.ai_summary)
+      .toBe("Rediseño de la web corporativa de ACME.");
+  });
+
+  it("reutiliza personas por ID sin pisar los datos escritos a mano", async () => {
+    const { projectId, meetingId } = await seed();
+    const p = await one<{ id: string }>(
+      "INSERT INTO people (name, company, job_title) VALUES ('Ana García', 'ACME', 'CTO') RETURNING id");
+    await tx((db) => applyAnalysis(db, projectId, meetingId, {
+      ...empty,
+      participantes: [persona({ persona_id: Number(p!.id), nombre: "Ana Garsia", cargo: "Product Owner",
+        telefono: "600 000 000", resumen_en_proyecto: "Aprueba el presupuesto" })],
+    }));
+    expect(await query("SELECT name, job_title, phone FROM people")).toEqual([
+      { name: "Ana García", job_title: "CTO", phone: "600 000 000" },
+    ]);
+    // El contexto de la IA incluye a la persona con su papel en el proyecto.
+    const ctx = await loadProjectContext(projectId, pool());
+    expect(ctx.people).toMatchObject([{ name: "Ana García", inProject: true, summary: "Aprueba el presupuesto" }]);
   });
 });
 

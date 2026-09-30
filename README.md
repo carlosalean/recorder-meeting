@@ -201,7 +201,11 @@ proyecto y:
 - **actualiza el estado** de las tareas existentes (en progreso, bloqueada,
   completada, cancelada) y los cambios de responsable o fecha,
 - **cierra** (o reabre) los temas que se dan por resueltos,
-- guarda un **historial** de cada cambio con la cita de la transcripción que lo justifica.
+- guarda un **historial** de cada cambio con la cita de la transcripción que lo justifica,
+- mantiene una descripción de **de qué va cada proyecto**,
+- identifica a las **personas** (stakeholders): quiénes son, para qué empresa trabajan,
+  su cargo y datos de contacto si se mencionan, su papel en cada proyecto y las
+  acciones que tienen asignadas.
 
 En una sola pantalla (**Panel**) ves todos los proyectos con sus temas y las
 tareas de cada tema, sus responsables, fechas y pendientes, con filtros por
@@ -228,6 +232,7 @@ Requisitos: [Docker Desktop](https://www.docker.com/products/docker-desktop/).
    - `ANTHROPIC_API_KEY`: tu clave de Claude.
    - `REUNIONES_DIR`: la carpeta de la grabadora, con barras `/`
      (p. ej. `C:/Users/carlo/Reuniones`).
+   - `OWNER_NAME` / `OWNER_ROLE`: tu nombre y perfil, para que la IA sepa quién graba.
    - `TZ`: tu zona horaria (p. ej. `Europe/Madrid`, `America/Bogota`, `America/Mexico_City`).
 3. Arranca todo:
    ```powershell
@@ -246,9 +251,17 @@ se conservan aunque pares o actualices los contenedores.
    - **Grabaciones**: lista las reuniones de la grabadora; elige el proyecto y pulsa *Asignar*.
    - En la página del proyecto: *Desde la grabadora*, o *Pegar o subir una
      transcripción* (para reuniones grabadas con otra herramienta).
+   Opcionalmente, despliega **Participantes** para marcar quién estuvo en la reunión
+   o escribir personas nuevas (`Nombre, empresa, cargo`, una por línea). Si no lo
+   indicas, la IA las deduce de la conversación.
 4. En unos segundos (según la longitud) verás los temas y tareas actualizados.
    Asigna las reuniones **en orden cronológico** para que los estados evolucionen bien.
-5. **Panel**: la vista general. Puedes cambiar el estado de una tarea directamente
+5. **Personas**: listado lateral agrupado por empresa, con buscador. Al pulsar en
+   una persona ves quién es, sus datos de contacto, en qué proyectos participa (de
+   qué va cada uno y cuál es su papel), sus acciones y las reuniones en las que
+   estuvo. Puedes corregir sus datos y **unir fichas duplicadas** (p. ej. «Ana» y
+   «Ana García»).
+6. **Panel**: la vista general. Puedes cambiar el estado de una tarea directamente
    desde el desplegable; en la página del proyecto (✎) puedes editar o borrar
    temas y tareas y añadirlos a mano.
 
@@ -295,6 +308,7 @@ TEST_DATABASE_URL=postgres://...  npm test  # los tests usan (y vacían) esa bas
 | `web/src/lib/migrations.ts` | Esquema de PostgreSQL (se aplica solo al arrancar) |
 | `web/src/lib/analysis.ts` | Prompt y llamada a Claude con salida estructurada |
 | `web/src/lib/tracking.ts` | Aplica el resultado de la IA a temas/tareas y registra el historial |
+| `web/src/lib/people.ts` | Alta, actualización y resolución de personas (responsables, participantes) |
 | `web/src/lib/recordings.ts` | Lee las carpetas de la grabadora |
 | `web/src/app/actions.ts` | Acciones del servidor (crear, editar, asignar reuniones…) |
 | `web/src/app/**/page.tsx` | Pantallas: panel, proyectos, clientes, grabaciones, reunión |

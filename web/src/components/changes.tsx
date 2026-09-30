@@ -11,6 +11,7 @@ const ACTION: Record<string, string> = {
   "actualizado tarea": "Tarea actualizada",
   "eliminado tema": "Tema eliminado",
   "eliminado tarea": "Tarea eliminada",
+  "creado persona": "Nueva persona",
 };
 
 export function ChangeList({ changes, showMeeting = true }: { changes: ChangeRow[]; showMeeting?: boolean }) {
@@ -21,7 +22,9 @@ export function ChangeList({ changes, showMeeting = true }: { changes: ChangeRow
         <li key={c.id}>
           <div>
             <span className={`tag a-${c.action}`}>{ACTION[`${c.action} ${c.entity}`]}</span>{" "}
-            <strong>{c.entity_title}</strong>
+            {c.entity === "persona"
+              ? <Link href={`/personas?id=${c.entity_id}`}><strong>{c.entity_title}</strong></Link>
+              : <strong>{c.entity_title}</strong>}
             {c.action === "estado" && c.old_status && (
               <> <Badge status={c.old_status} /> → <Badge status={c.new_status ?? ""} /></>
             )}

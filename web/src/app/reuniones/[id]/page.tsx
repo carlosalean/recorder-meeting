@@ -5,14 +5,15 @@ import { AutoRefresh } from "@/components/auto-refresh";
 import { ChangeList } from "@/components/changes";
 import { ActionForm, Submit } from "@/components/forms";
 import { Badge, Md, fmtDateTime } from "@/components/ui";
-import { getMeeting, listChanges } from "@/lib/queries";
+import { getMeeting, listChanges, meetingPeople } from "@/lib/queries";
+import { initials } from "@/lib/format";
 
 export default async function MeetingPage({ params }: PageProps<"/reuniones/[id]">) {
   const { id } = await params;
   if (!/^\d+$/.test(id)) notFound();
   const m = await getMeeting(id);
   if (!m) notFound();
-  const changes = await listChanges({ meetingId: id });
+  const [changes, people] = await Promise.all([listChanges({ meetingId: id }), meetingPeople(id)]);
 
   return (
     <>
@@ -76,6 +77,23 @@ export default async function MeetingPage({ params }: PageProps<"/reuniones/[id]
           </details>
         </div>
         <aside>
+          <section className="card">
+            <h3>Participantes ({people.length})</h3>
+            {people.length === 0 && <p className="muted small">Sin participantes identificados.</p>}
+            <ul className="people-mini">
+              {people.map((p) => (
+                <li key={p.id}>
+                  <Link href={`/personas?id=${p.id}`} className="person-link">
+                    <span className="avatar">{initials(p.name)}</span>
+                    <span className="person-link-text">
+                      <span className="person-name">{p.name}</span>
+                      <span className="muted small">{[p.job_title, p.company].filter(Boolean).join(" · ")}</span>
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
           <section className="card">
             <h3>Cambios aplicados al proyecto ({changes.length})</h3>
             <ChangeList changes={changes} showMeeting={false} />

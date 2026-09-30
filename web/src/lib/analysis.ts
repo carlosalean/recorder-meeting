@@ -13,10 +13,42 @@ const nullableDate = z
   .nullable()
   .describe("Fecha en formato YYYY-MM-DD, o null si no se menciona");
 
+const nullableText = (d: string) => z.string().nullable().describe(d);
+
 export const AnalysisSchema = z.object({
   resumen: z
     .string()
     .describe("Resumen de la reunión en Markdown: propósito, conclusiones y decisiones principales"),
+  resumen_proyecto: z
+    .string()
+    .describe(
+      "Descripción ACTUALIZADA y acumulada del proyecto (2-6 frases): objetivo, alcance, tecnologías o " +
+        "enfoque, situación actual y próximos hitos. Parte de la descripción previa y añade lo nuevo.",
+    ),
+  participantes: z
+    .array(
+      z.object({
+        persona_id: z.number().int().nullable().describe("ID de una persona CONOCIDA ([P..]), o null si es nueva"),
+        nombre: z.string().describe("Nombre (y apellido si se conoce)"),
+        empresa: nullableText("Empresa u organización para la que trabaja, si se sabe"),
+        cargo: nullableText("Cargo o puesto, si se sabe"),
+        email: nullableText("Email, solo si se menciona"),
+        telefono: nullableText("Teléfono, solo si se menciona"),
+        asistio: z.boolean().describe("true si participó en la reunión; false si solo se la menciona"),
+        rol_en_proyecto: nullableText("Papel en ESTE proyecto (p. ej. 'Product Owner del cliente'), o null"),
+        resumen_en_proyecto: z
+          .string()
+          .describe(
+            "Qué hace, de qué se encarga y qué posiciones ha tomado en ESTE proyecto, acumulado con lo ya " +
+              "conocido (1-4 frases)",
+          ),
+        perfil: nullableText(
+          "Quién es esta persona en general (empresa, puesto, especialidad, cómo se relaciona con el " +
+            "usuario), acumulado con el perfil previo. null si no hay nada que añadir",
+        ),
+      }),
+    )
+    .describe("Personas que participan en la reunión o que tienen un papel relevante en lo que se habla"),
   temas_nuevos: z.array(
     z.object({
       clave: z.string().describe("Identificador temporal, p. ej. 'N1', para referenciarlo en tareas_nuevas"),
@@ -37,7 +69,7 @@ export const AnalysisSchema = z.object({
       tema_clave: z.string().nullable().describe("Clave de un tema de temas_nuevos, o null"),
       titulo: z.string(),
       descripcion: z.string(),
-      responsable: z.string().nullable(),
+      responsable: z.string().nullable().describe("Nombre de la persona responsable, tal como aparece en participantes"),
       fecha_limite: nullableDate,
       estado: TaskStatus,
       evidencia: z.string().describe("Marca de tiempo y cita breve de la transcripción"),
@@ -56,8 +88,10 @@ export const AnalysisSchema = z.object({
 });
 export type Analysis = z.infer<typeof AnalysisSchema>;
 
-const SYSTEM = `Eres el asistente de seguimiento de proyectos de una consultora. Tu trabajo es \
-mantener al día la lista de TEMAS y TAREAS de un proyecto a partir de las transcripciones de sus reuniones.
+const SYSTEM = `Eres el asistente de seguimiento de proyectos y la base de conocimiento de un profesional \
+que trabaja para varias empresas. Tu trabajo es mantener al día, a partir de las transcripciones de sus \
+reuniones, la lista de TEMAS y TAREAS de cada proyecto, una descripción de qué va el proyecto y quién es \
+cada PERSONA (stakeholder) y qué papel tiene en cada proyecto.
 
 Recibirás el estado actual del proyecto (temas con sus tareas, cada uno con su ID) y la transcripción \
 automática de una nueva reunión. La transcripción tiene marcas de tiempo [hh:mm:ss], puede contener \
@@ -77,12 +111,31 @@ encajen; crea temas nuevos solo cuando haga falta.
 - Cierra un tema cuando se dé por resuelto y no queden acciones pendientes en él; reábrelo si vuelve a surgir.
 - Las fechas relativas ("el viernes", "la semana que viene") conviértelas a YYYY-MM-DD usando la fecha de la reunión.
 - En evidencia, pon la marca de tiempo y una cita breve que justifique el cambio.
+- Personas: incluye en participantes a quienes asisten y a quienes tienen un papel relevante (responsables \
+de tareas, decisores, contactos del cliente...). Si coincide con una persona conocida ([P..]) usa su ID, \
+aunque el nombre aparezca abreviado o mal transcrito; crea una nueva solo si no existe. Si se indican \
+participantes al subir la reunión, dales prioridad. Usa en "responsable" de las tareas el mismo nombre que \
+en participantes.
+- En resumen_en_proyecto y perfil, conserva lo que ya se sabía y añade lo nuevo; no borres información útil.
 - Usa los IDs exactamente como aparecen. Escribe todo en español.`;
+
+export type KnownPerson = {
+  id: number;
+  name: string;
+  company: string | null;
+  job_title: string | null;
+  profile: string | null;
+  role: string | null;      // papel en este proyecto
+  summary: string | null;   // qué hace en este proyecto
+  inProject: boolean;
+};
 
 export type ProjectContext = {
   client: string;
   project: string;
   description: string | null;
+  aiSummary?: string | null;
+  people?: KnownPerson[];
   topics: {
     id: number;
     title: string;
@@ -92,9 +145,30 @@ export type ProjectContext = {
   }[];
 };
 
+const clean = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+
 export function renderContext(ctx: ProjectContext): string {
-  const lines = [`CLIENTE: ${ctx.client}`, `PROYECTO: ${ctx.project}`];
-  if (ctx.description) lines.push(`DESCRIPCIÓN: ${ctx.description}`);
+  const owner = [process.env.OWNER_NAME, process.env.OWNER_ROLE].filter(Boolean).join(", ");
+  const lines = owner ? [`USUARIO QUE GRABA LAS REUNIONES: ${owner}`, ""] : [];
+  lines.push(`CLIENTE: ${ctx.client}`, `PROYECTO: ${ctx.project}`);
+  if (ctx.description) lines.push(`DESCRIPCIÓN (escrita por el usuario): ${ctx.description}`);
+  if (ctx.aiSummary) lines.push(`DESCRIPCIÓN ACTUAL DEL PROYECTO: ${clean(ctx.aiSummary)}`);
+
+  const people = ctx.people ?? [];
+  const inProject = people.filter((p) => p.inProject);
+  const others = people.filter((p) => !p.inProject);
+  lines.push("", "PERSONAS DEL PROYECTO:");
+  if (!inProject.length) lines.push("(ninguna registrada todavía)");
+  for (const p of inProject) {
+    const head = [p.name, p.company, p.job_title].filter(Boolean).join(" — ");
+    lines.push(`[P${p.id}] ${head}${p.role ? ` | papel: ${p.role}` : ""}`);
+    if (p.summary) lines.push(`   en el proyecto: ${clean(p.summary)}`);
+    if (p.profile) lines.push(`   perfil: ${clean(p.profile)}`);
+  }
+  if (others.length) {
+    lines.push("", "OTRAS PERSONAS CONOCIDAS (de otros proyectos):");
+    for (const p of others) lines.push(`[P${p.id}] ${[p.name, p.company, p.job_title].filter(Boolean).join(" — ")}`);
+  }
   lines.push("", "ESTADO ACTUAL DE TEMAS Y TAREAS:");
   if (!ctx.topics.length) lines.push("(todavía no hay temas: es la primera reunión registrada)");
   for (const t of ctx.topics) {
@@ -119,7 +193,13 @@ export function anthropicClient(): Anthropic {
 
 export async function analyzeMeeting(
   ctx: ProjectContext,
-  meeting: { title: string; date: string; transcript: string; recorderSummary?: string | null },
+  meeting: {
+    title: string;
+    date: string;
+    transcript: string;
+    recorderSummary?: string | null;
+    participantsHint?: string | null;
+  },
   client: Anthropic = anthropicClient(),
 ): Promise<Analysis> {
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
@@ -129,6 +209,9 @@ export async function analyzeMeeting(
     renderContext(ctx),
     "",
     `NUEVA REUNIÓN: "${meeting.title}" — fecha: ${meeting.date}`,
+    meeting.participantsHint
+      ? `\nPARTICIPANTES INDICADOS POR EL USUARIO:\n${meeting.participantsHint}`
+      : "\nParticipantes: no indicados; dedúcelos de la conversación.",
     meeting.recorderSummary
       ? `\n<resumen_previo>\n${meeting.recorderSummary}\n</resumen_previo>`
       : "",

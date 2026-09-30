@@ -3,13 +3,15 @@ import { importRecording } from "@/app/actions";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { ActionForm, Submit } from "@/components/forms";
 import { Empty, fmtDateTime } from "@/components/ui";
-import { importedFolders, listProjects, processingCount } from "@/lib/queries";
+import { importedFolders, listPeople, listProjects, processingCount } from "@/lib/queries";
+import { ParticipantsPicker } from "@/components/participants";
 import { listRecordings } from "@/lib/recordings";
 
 export default async function RecordingsPage() {
-  const [recordings, imported, projects, processing] = await Promise.all([
-    listRecordings(), importedFolders(), listProjects({ status: "activo" }), processingCount(),
+  const [recordings, imported, projects, processing, people] = await Promise.all([
+    listRecordings(), importedFolders(), listProjects({ status: "activo" }), processingCount(), listPeople(),
   ]);
+  const pickable = people.map((p) => ({ id: p.id, name: p.name, company: p.company }));
   const byFolder = new Map(imported.map((i) => [i.source_path, i]));
 
   return (
@@ -63,6 +65,7 @@ export default async function RecordingsPage() {
                           ))}
                         </select>
                         <Submit pendingText="Enviando…">Asignar</Submit>
+                        <ParticipantsPicker people={pickable} />
                       </ActionForm>
                     )}
                   </td>

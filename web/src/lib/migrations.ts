@@ -99,6 +99,64 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       CREATE INDEX ON changes (meeting_id);
     `,
   },
+  {
+    id: "002_personas",
+    sql: `
+      -- Resumen global del proyecto que la IA mantiene al día ("de qué va").
+      ALTER TABLE projects ADD COLUMN ai_summary text;
+
+      CREATE TABLE people (
+        id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        name       text NOT NULL,
+        company    text,
+        job_title  text,
+        email      text,
+        phone      text,
+        notes      text,              -- notas manuales
+        ai_profile text,              -- quién es, según las reuniones (lo mantiene la IA)
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX ON people (lower(name));
+
+      -- Papel de cada persona en cada proyecto.
+      CREATE TABLE project_people (
+        project_id  bigint NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        person_id   bigint NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        role        text,             -- p. ej. "Product Owner del cliente"
+        summary     text,             -- qué hace / de qué se encarga en el proyecto
+        updated_at  timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (project_id, person_id)
+      );
+      CREATE INDEX ON project_people (person_id);
+
+      -- Personas que participaron en cada reunión.
+      CREATE TABLE meeting_people (
+        meeting_id bigint NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        person_id  bigint NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        PRIMARY KEY (meeting_id, person_id)
+      );
+      CREATE INDEX ON meeting_people (person_id);
+
+      -- Participantes indicados al subir la reunión (ayuda para la IA).
+      ALTER TABLE meetings ADD COLUMN participants_hint text;
+
+      ALTER TABLE tasks ADD COLUMN owner_person_id bigint REFERENCES people(id) ON DELETE SET NULL;
+      CREATE INDEX ON tasks (owner_person_id);
+
+      ALTER TABLE changes DROP CONSTRAINT changes_entity_check;
+      ALTER TABLE changes ADD CONSTRAINT changes_entity_check CHECK (entity IN ('tema', 'tarea', 'persona'));
+
+      -- Convierte los responsables ya existentes (texto) en personas.
+      INSERT INTO people (name)
+        SELECT DISTINCT ON (lower(trim(owner))) trim(owner) FROM tasks
+        WHERE owner IS NOT NULL AND trim(owner) <> '' ORDER BY lower(trim(owner));
+      UPDATE tasks k SET owner_person_id = p.id FROM people p WHERE lower(trim(k.owner)) = lower(p.name);
+      INSERT INTO project_people (project_id, person_id)
+        SELECT DISTINCT t.project_id, k.owner_person_id FROM tasks k JOIN topics t ON t.id = k.topic_id
+        WHERE k.owner_person_id IS NOT NULL;
+    `,
+  },
 ];
 
 export async function migrate(): Promise<void> {

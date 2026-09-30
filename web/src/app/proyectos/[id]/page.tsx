@@ -5,9 +5,11 @@ import { AutoRefresh } from "@/components/auto-refresh";
 import { TopicBoard } from "@/components/board";
 import { ChangeList } from "@/components/changes";
 import { ActionForm, Submit } from "@/components/forms";
-import { Badge, Empty, fmtDate, fmtDateTime } from "@/components/ui";
+import { ParticipantsPicker } from "@/components/participants";
+import { Badge, Empty, Md, fmtDate, fmtDateTime } from "@/components/ui";
+import { initials } from "@/lib/format";
 import {
-  getBoard, getProject, importedFolders, listChanges, listClients, listMeetings,
+  getBoard, getProject, importedFolders, listChanges, listClients, listMeetings, listPeople, projectPeople,
 } from "@/lib/queries";
 import { listRecordings } from "@/lib/recordings";
 import { LABELS, PROJECT_STATUSES } from "@/lib/status";
@@ -18,14 +20,18 @@ export default async function ProjectPage({ params }: PageProps<"/proyectos/[id]
   const project = await getProject(id);
   if (!project) notFound();
 
-  const [board, meetings, changes, clients, recordings, imported] = await Promise.all([
+  const [board, meetings, changes, clients, recordings, imported, people, allPeople] = await Promise.all([
     getBoard([id], { onlyOpen: false }),
     listMeetings(id),
     listChanges({ projectId: id, limit: 60 }),
     listClients(),
     listRecordings(),
     importedFolders(),
+    projectPeople(id),
+    listPeople(),
   ]);
+  const inProject = new Set(people.map((p) => p.id));
+  const pickable = allPeople.map((p) => ({ id: p.id, name: p.name, company: p.company, inProject: inProject.has(p.id) }));
   const importedSet = new Set(imported.map((i) => i.source_path));
   const pending = recordings.items.filter((r) => !importedSet.has(r.folder));
   const processing = meetings.some((m) => m.status === "procesando");
@@ -78,6 +84,13 @@ export default async function ProjectPage({ params }: PageProps<"/proyectos/[id]
 
       <div className="two-col">
         <div>
+          {project.ai_summary && (
+            <section className="card about-card">
+              <h3>De qué va</h3>
+              <Md>{project.ai_summary}</Md>
+              <p className="muted small">Descripción mantenida por la IA a partir de las reuniones.</p>
+            </section>
+          )}
           <h2>Temas y tareas</h2>
           {board.topics.length === 0 && (
             <Empty>Todavía no hay temas. Incorpora una reunión y la IA los creará a partir de la transcripción.</Empty>
@@ -104,6 +117,7 @@ export default async function ProjectPage({ params }: PageProps<"/proyectos/[id]
                     </select>
                   </label>
                   <input name="title" placeholder="Título (opcional)" />
+                  <ParticipantsPicker people={pickable} />
                   <Submit pendingText="Enviando…">Asignar y procesar</Submit>
                 </ActionForm>
               ) : (
@@ -120,9 +134,34 @@ export default async function ProjectPage({ params }: PageProps<"/proyectos/[id]
                 <label className="small">…o adjunta un archivo .txt / .md
                   <input name="file" type="file" accept=".txt,.md,.vtt,.srt,text/plain" />
                 </label>
+                <ParticipantsPicker people={pickable} />
                 <Submit pendingText="Enviando…">Añadir y procesar</Submit>
               </ActionForm>
             </details>
+          </section>
+
+          <section className="card">
+            <h3>Personas ({people.length})</h3>
+            {people.length === 0 && (
+              <p className="muted small">Se añadirán al procesar reuniones.</p>
+            )}
+            <ul className="people-mini">
+              {people.map((p) => (
+                <li key={p.id}>
+                  <Link href={`/personas?id=${p.id}`} className="person-link">
+                    <span className="avatar">{initials(p.name)}</span>
+                    <span className="person-link-text">
+                      <span className="person-name">{p.name}</span>
+                      <span className="muted small">
+                        {p.role || [p.job_title, p.company].filter(Boolean).join(" · ") || "Papel sin definir"}
+                      </span>
+                    </span>
+                    {p.open_tasks > 0 && <span className="pill">{p.open_tasks}</span>}
+                  </Link>
+                  {p.summary && <div className="small person-summary">{p.summary}</div>}
+                </li>
+              ))}
+            </ul>
           </section>
 
           <section className="card">

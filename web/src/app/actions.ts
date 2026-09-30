@@ -6,7 +6,9 @@ import { after } from "next/server";
 import { one, pool, query, tx } from "@/lib/db";
 import { readRecording } from "@/lib/recordings";
 import { PROJECT_STATUSES, TASK_STATUSES, TOPIC_STATUSES } from "@/lib/status";
+import { applyParticipants, createPerson } from "@/lib/people";
 import { logChange, processMeeting, validDate } from "@/lib/tracking";
+import type { PoolClient } from "pg";
 
 export type FormState = { error?: string; ok?: number } | undefined;
 
@@ -140,6 +142,17 @@ export async function deleteTopic(_: FormState, fd: FormData): Promise<FormState
 
 // --------------------------------------------------------------------------- Tareas
 
+/** Vincula el responsable escrito a mano con una persona (la crea si no existe). */
+async function ownerPerson(db: PoolClient, projectId: number, name: string | null) {
+  if (!name) return { name: null, personId: null };
+  const people = await applyParticipants(db, projectId, 0, [], async (id, n) => {
+    await logChange(db, { projectId, meetingId: null, entity: "persona", entityId: id, entityTitle: n,
+      action: "creado", note: "Creada al asignarle una tarea" });
+  });
+  const p = await people.ensure(name);
+  return { name: p?.name ?? name, personId: p?.id ?? null };
+}
+
 export async function saveTask(_: FormState, fd: FormData): Promise<FormState> {
   return run(async () => {
     const id = str(fd, "id");
@@ -153,10 +166,11 @@ export async function saveTask(_: FormState, fd: FormData): Promise<FormState> {
       await tx(async (db) => {
         const t = await one<{ project_id: string }>("SELECT project_id FROM topics WHERE id=$1", [topicId], db);
         if (!t) throw new UserError("El tema ya no existe");
+        const who = await ownerPerson(db, Number(t.project_id), owner);
         const row = await one<{ id: string }>(
-          `INSERT INTO tasks (topic_id, title, description, owner, due_date, status)
-           VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-          [topicId, title, description, owner, due, status], db);
+          `INSERT INTO tasks (topic_id, title, description, owner, owner_person_id, due_date, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+          [topicId, title, description, who.name, who.personId, due, status], db);
         await db.query("UPDATE topics SET status='abierto', closed_at=NULL, updated_at=now() WHERE id=$1", [topicId]);
         await logChange(db, { projectId: Number(t.project_id), meetingId: null, entity: "tarea",
           entityId: Number(row!.id), entityTitle: title, action: "creado", newStatus: status,
@@ -171,7 +185,8 @@ export async function saveTask(_: FormState, fd: FormData): Promise<FormState> {
 /** Cambio rápido de estado desde el panel (select en la tabla de tareas). */
 export async function setTaskStatus(taskId: string, status: string): Promise<void> {
   const cur = await one<{ title: string; owner: string | null; due_date: string | null; description: string | null }>(
-    "SELECT title, owner, to_char(due_date,'YYYY-MM-DD') AS due_date, description FROM tasks WHERE id=$1", [taskId]);
+    `SELECT k.title, COALESCE(p.name, k.owner) AS owner, to_char(k.due_date,'YYYY-MM-DD') AS due_date, k.description
+     FROM tasks k LEFT JOIN people p ON p.id = k.owner_person_id WHERE k.id=$1`, [taskId]);
   if (!cur) return;
   await updateTask(taskId, { title: cur.title, owner: cur.owner, due: cur.due_date,
     description: cur.description, status });
@@ -183,16 +198,24 @@ async function updateTask(
   v: { title: string; owner: string | null; due: string | null; description: string | null; status: string | null },
 ) {
   await tx(async (db) => {
-    const cur = await one<{ status: string; owner: string | null; due_date: string | null; project_id: string }>(
-      `SELECT k.status, k.owner, to_char(k.due_date,'YYYY-MM-DD') AS due_date, t.project_id
-       FROM tasks k JOIN topics t ON t.id = k.topic_id WHERE k.id = $1 FOR UPDATE OF k`, [id], db);
+    const cur = await one<{
+      status: string; owner: string | null; owner_person_id: string | null; due_date: string | null; project_id: string;
+    }>(
+      `SELECT k.status, COALESCE(p.name, k.owner) AS owner, k.owner_person_id,
+              to_char(k.due_date,'YYYY-MM-DD') AS due_date, t.project_id
+       FROM tasks k JOIN topics t ON t.id = k.topic_id LEFT JOIN people p ON p.id = k.owner_person_id
+       WHERE k.id = $1 FOR UPDATE OF k`, [id], db);
     if (!cur) throw new UserError("La tarea ya no existe");
     const status = oneOf(v.status, TASK_STATUSES, cur.status as "pendiente");
+    const who = v.owner === cur.owner
+      ? { name: cur.owner, personId: cur.owner_person_id }
+      : await ownerPerson(db, Number(cur.project_id), v.owner);
     await db.query(
-      `UPDATE tasks SET title=$2, owner=$3, due_date=$4, description=$5, status=$6, updated_at=now(),
-         closed_at = CASE WHEN $6 IN ('completada','cancelada') THEN COALESCE(closed_at, now()) END
+      `UPDATE tasks SET title=$2, owner=$3, owner_person_id=$4, due_date=$5, description=$6, status=$7,
+         updated_at=now(),
+         closed_at = CASE WHEN $7 IN ('completada','cancelada') THEN COALESCE(closed_at, now()) END
        WHERE id=$1`,
-      [id, v.title, v.owner, v.due, v.description, status]);
+      [id, v.title, who.name, who.personId, v.due, v.description, status]);
     const base = { projectId: Number(cur.project_id), meetingId: null, entity: "tarea" as const,
       entityId: Number(id), entityTitle: v.title };
     if (status !== cur.status) {
@@ -229,6 +252,33 @@ function scheduleProcessing(meetingId: string) {
   after(() => processMeeting(Number(meetingId)));
 }
 
+/**
+ * Participantes indicados al subir una reunión: personas conocidas (casillas) y
+ * personas nuevas en texto libre. Se guardan como pista para la IA y las conocidas
+ * quedan ya registradas como asistentes.
+ */
+async function saveParticipants(db: PoolClient, meetingId: string, projectId: string, fd: FormData) {
+  const ids = fd.getAll("people").map(String).filter((x) => /^\d+$/.test(x));
+  const known = ids.length
+    ? await query<{ id: string; name: string; company: string | null; job_title: string | null }>(
+        "SELECT id, name, company, job_title FROM people WHERE id = ANY($1::bigint[])", [ids], db)
+    : [];
+  const extra = (str(fd, "new_people") ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (const p of known) {
+    await db.query("INSERT INTO meeting_people (meeting_id, person_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+      [meetingId, p.id]);
+    await db.query(
+      "INSERT INTO project_people (project_id, person_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [projectId, p.id]);
+  }
+  const lines = [
+    ...known.map((p) => `- [P${p.id}] ${[p.name, p.company, p.job_title].filter(Boolean).join(" — ")}`),
+    ...extra.map((l) => `- ${l} (persona nueva, indicada por el usuario)`),
+  ];
+  if (lines.length) {
+    await db.query("UPDATE meetings SET participants_hint = $2 WHERE id = $1", [meetingId, lines.join("\n")]);
+  }
+}
+
 export async function addMeeting(_: FormState, fd: FormData): Promise<FormState> {
   return run(async () => {
     const projectId = required(fd, "project_id", "El proyecto");
@@ -238,11 +288,15 @@ export async function addMeeting(_: FormState, fd: FormData): Promise<FormState>
     if (!transcript && file instanceof File && file.size > 0) transcript = (await file.text()).trim();
     if (!transcript) throw new UserError("Pega la transcripción o adjunta el archivo transcripcion.txt");
     const date = str(fd, "meeting_date");
-    const row = await one<{ id: string }>(
-      `INSERT INTO meetings (project_id, title, meeting_date, transcript, source, status)
-       VALUES ($1, $2, COALESCE($3::timestamp, now()), $4, 'manual', 'procesando') RETURNING id`,
-      [projectId, title, date, transcript]);
-    scheduleProcessing(row!.id);
+    const id = await tx(async (db) => {
+      const row = await one<{ id: string }>(
+        `INSERT INTO meetings (project_id, title, meeting_date, transcript, source, status)
+         VALUES ($1, $2, COALESCE($3::timestamp, now()), $4, 'manual', 'procesando') RETURNING id`,
+        [projectId, title, date, transcript], db);
+      await saveParticipants(db, row!.id, projectId, fd);
+      return row!.id;
+    });
+    scheduleProcessing(id);
   });
 }
 
@@ -251,13 +305,17 @@ export async function importRecording(_: FormState, fd: FormData): Promise<FormS
     const folder = required(fd, "folder", "La grabación");
     const projectId = required(fd, "project_id", "El proyecto");
     const rec = await readRecording(folder);
-    const row = await one<{ id: string }>(
-      `INSERT INTO meetings (project_id, title, meeting_date, transcript, recorder_summary, source,
-                             source_path, audio_file, status)
-       VALUES ($1,$2,$3,$4,$5,'grabadora',$6,$7,'procesando') RETURNING id`,
-      [projectId, str(fd, "title") ?? rec.title, rec.date ?? new Date(), rec.transcript, rec.summary,
-       folder, rec.audio]);
-    scheduleProcessing(row!.id);
+    const id = await tx(async (db) => {
+      const row = await one<{ id: string }>(
+        `INSERT INTO meetings (project_id, title, meeting_date, transcript, recorder_summary, source,
+                               source_path, audio_file, status)
+         VALUES ($1,$2,$3,$4,$5,'grabadora',$6,$7,'procesando') RETURNING id`,
+        [projectId, str(fd, "title") ?? rec.title, rec.date ?? new Date(), rec.transcript, rec.summary,
+         folder, rec.audio], db);
+      await saveParticipants(db, row!.id, projectId, fd);
+      return row!.id;
+    });
+    scheduleProcessing(id);
   });
 }
 
@@ -276,4 +334,65 @@ export async function deleteMeeting(_: FormState, fd: FormData): Promise<FormSta
   const m = await one<{ project_id: string }>("DELETE FROM meetings WHERE id=$1 RETURNING project_id", [id]);
   revalidatePath("/", "layout");
   redirect(m ? `/proyectos/${m.project_id}` : "/");
+}
+
+// --------------------------------------------------------------------------- Personas
+
+export async function savePerson(_: FormState, fd: FormData): Promise<FormState> {
+  let newId: number | undefined;
+  const res = await run(async () => {
+    const id = str(fd, "id");
+    const v = {
+      name: required(fd, "name", "El nombre"), company: str(fd, "company"), job_title: str(fd, "job_title"),
+      email: str(fd, "email"), phone: str(fd, "phone"),
+    };
+    if (id) {
+      await query(
+        `UPDATE people SET name=$2, company=$3, job_title=$4, email=$5, phone=$6, notes=$7, ai_profile=$8,
+           updated_at=now() WHERE id=$1`,
+        [id, v.name, v.company, v.job_title, v.email, v.phone, str(fd, "notes"), str(fd, "ai_profile")]);
+    } else {
+      newId = await createPerson(pool(), v);
+      if (str(fd, "notes")) await query("UPDATE people SET notes=$2 WHERE id=$1", [newId, str(fd, "notes")]);
+    }
+  });
+  if (newId) redirect(`/personas?id=${newId}`);
+  return res;
+}
+
+export async function deletePerson(_: FormState, fd: FormData): Promise<FormState> {
+  await run(async () => {
+    await query("DELETE FROM people WHERE id = $1", [required(fd, "id", "id")]);
+  });
+  redirect("/personas");
+}
+
+/** Une dos fichas de la misma persona (p. ej. "Ana" y "Ana García"). */
+export async function mergePeople(_: FormState, fd: FormData): Promise<FormState> {
+  const into = required(fd, "id", "id");
+  const from = required(fd, "merge_from", "La persona a unir");
+  if (into === from) return { error: "Elige otra persona" };
+  await run(async () => {
+    await tx(async (db) => {
+      await db.query("UPDATE tasks SET owner_person_id = $1 WHERE owner_person_id = $2", [into, from]);
+      await db.query(
+        `INSERT INTO project_people (project_id, person_id, role, summary)
+           SELECT project_id, $1, role, summary FROM project_people WHERE person_id = $2
+         ON CONFLICT (project_id, person_id) DO UPDATE SET
+           role = COALESCE(project_people.role, EXCLUDED.role),
+           summary = CONCAT_WS(' ', project_people.summary, EXCLUDED.summary)`,
+        [into, from]);
+      await db.query(
+        `INSERT INTO meeting_people (meeting_id, person_id) SELECT meeting_id, $1 FROM meeting_people
+         WHERE person_id = $2 ON CONFLICT DO NOTHING`, [into, from]);
+      await db.query(
+        `UPDATE people i SET company = COALESCE(i.company, f.company), job_title = COALESCE(i.job_title, f.job_title),
+           email = COALESCE(i.email, f.email), phone = COALESCE(i.phone, f.phone),
+           notes = NULLIF(CONCAT_WS(E'\\n', i.notes, f.notes), ''),
+           ai_profile = NULLIF(CONCAT_WS(' ', i.ai_profile, f.ai_profile), ''), updated_at = now()
+         FROM people f WHERE i.id = $1 AND f.id = $2`, [into, from]);
+      await db.query("DELETE FROM people WHERE id = $1", [from]);
+    });
+  });
+  redirect(`/personas?id=${into}`);
 }

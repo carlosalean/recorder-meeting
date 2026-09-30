@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { analyzeMeeting, type Analysis, type ProjectContext } from "./analysis";
 import { type Db, one, pool, query, tx } from "./db";
+import { applyParticipants } from "./people";
 import { TASK_STATUSES, type TaskStatus, TOPIC_STATUSES, type TopicStatus, isClosedTask } from "./status";
 
 const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
@@ -12,7 +13,7 @@ const normTopicStatus = (s: string | null | undefined): TopicStatus | null =>
 type Change = {
   projectId: number;
   meetingId: number | null;
-  entity: "tema" | "tarea";
+  entity: "tema" | "tarea" | "persona";
   entityId: number;
   entityTitle: string;
   action: "creado" | "estado" | "actualizado" | "eliminado";
@@ -43,8 +44,8 @@ export function validDate(s: string | null | undefined): string | null {
 // ---------------------------------------------------------------------------
 
 export async function loadProjectContext(projectId: number, db: Db): Promise<ProjectContext> {
-  const project = await one<{ name: string; description: string | null; client: string }>(
-    `SELECT p.name, p.description, c.name AS client
+  const project = await one<{ name: string; description: string | null; ai_summary: string | null; client: string }>(
+    `SELECT p.name, p.description, p.ai_summary, c.name AS client
      FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.id = $1`,
     [projectId], db,
   );
@@ -59,10 +60,25 @@ export async function loadProjectContext(projectId: number, db: Db): Promise<Pro
      FROM tasks t JOIN topics tp ON tp.id = t.topic_id WHERE tp.project_id = $1 ORDER BY t.id`,
     [projectId], db,
   );
+  const people = await query<{
+    id: string; name: string; company: string | null; job_title: string | null; ai_profile: string | null;
+    role: string | null; summary: string | null; in_project: boolean;
+  }>(
+    `SELECT p.id, p.name, p.company, p.job_title, p.ai_profile, pp.role, pp.summary,
+            pp.person_id IS NOT NULL AS in_project
+     FROM people p LEFT JOIN project_people pp ON pp.person_id = p.id AND pp.project_id = $1
+     ORDER BY in_project DESC, p.updated_at DESC LIMIT 400`,
+    [projectId], db,
+  );
   return {
     client: project.client,
     project: project.name,
     description: project.description,
+    aiSummary: project.ai_summary,
+    people: people.map((p) => ({
+      id: Number(p.id), name: p.name, company: p.company, job_title: p.job_title, profile: p.ai_profile,
+      role: p.role, summary: p.summary, inProject: p.in_project,
+    })),
     topics: topics.map((t) => ({
       id: Number(t.id),
       title: t.title,
@@ -85,6 +101,7 @@ export type ApplyResult = {
   newTasks: number;
   statusChanges: number;
   updates: number;
+  newPeople: number;
 };
 
 export async function applyAnalysis(
@@ -93,17 +110,31 @@ export async function applyAnalysis(
   meetingId: number,
   a: Analysis,
 ): Promise<ApplyResult> {
-  const res: ApplyResult = { newTopics: 0, newTasks: 0, statusChanges: 0, updates: 0 };
+  const res: ApplyResult = { newTopics: 0, newTasks: 0, statusChanges: 0, updates: 0, newPeople: 0 };
   const base = { projectId, meetingId };
+
+  // 0) Personas y descripción del proyecto
+  const people = await applyParticipants(db, projectId, meetingId, a.participantes ?? [], async (id, name, note) => {
+    await logChange(db, { ...base, entity: "persona", entityId: id, entityTitle: name, action: "creado", note });
+    res.newPeople++;
+  });
+  if (a.resumen_proyecto?.trim()) {
+    await db.query("UPDATE projects SET ai_summary = $2 WHERE id = $1", [projectId, a.resumen_proyecto.trim()]);
+  }
+  const owner = async (name: string | null | undefined) => {
+    const p = name?.trim() ? await people.ensure(name) : undefined;
+    return { name: p?.name ?? (name?.trim() || null), personId: p?.id ?? null };
+  };
 
   const topicRows = await query<{ id: string; title: string; status: string }>(
     "SELECT id, title, status FROM topics WHERE project_id = $1", [projectId], db,
   );
   const topics = new Map(topicRows.map((t) => [Number(t.id), { title: t.title, status: t.status }]));
   const taskRows = await query<{
-    id: string; title: string; status: string; owner: string | null; due_date: string | null;
+    id: string; title: string; status: string; owner: string | null; owner_person_id: string | null;
+    due_date: string | null;
   }>(
-    `SELECT t.id, t.title, t.status, t.owner, to_char(t.due_date, 'YYYY-MM-DD') AS due_date
+    `SELECT t.id, t.title, t.status, t.owner, t.owner_person_id, to_char(t.due_date, 'YYYY-MM-DD') AS due_date
      FROM tasks t JOIN topics tp ON tp.id = t.topic_id WHERE tp.project_id = $1`,
     [projectId], db,
   );
@@ -164,12 +195,13 @@ export async function applyAnalysis(
     if (topics.get(topicId)!.status === "cerrado" && !isClosedTask(estado)) {
       await setTopicStatus(topicId, "abierto", "Reabierto: surge una tarea nueva", t.evidencia);
     }
+    const who = await owner(t.responsable);
     const row = await one<{ id: string }>(
-      `INSERT INTO tasks (topic_id, title, description, owner, due_date, status,
+      `INSERT INTO tasks (topic_id, title, description, owner, owner_person_id, due_date, status,
                           created_meeting_id, last_meeting_id, closed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$7, CASE WHEN $6 IN ('completada','cancelada') THEN now() END)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8, CASE WHEN $7 IN ('completada','cancelada') THEN now() END)
        RETURNING id`,
-      [topicId, t.titulo, t.descripcion || null, t.responsable || null, validDate(t.fecha_limite),
+      [topicId, t.titulo, t.descripcion || null, who.name, who.personId, validDate(t.fecha_limite),
        estado, meetingId], db,
     );
     await logChange(db, { ...base, entity: "tarea", entityId: Number(row!.id), entityTitle: t.titulo,
@@ -182,13 +214,17 @@ export async function applyAnalysis(
     const cur = tasks.get(c.tarea_id);
     if (!cur) continue;
     const status = normTaskStatus(c.estado) ?? cur.status;
-    const owner = c.responsable?.trim() || cur.owner;
+    const who = c.responsable?.trim()
+      ? await owner(c.responsable)
+      : { name: cur.owner, personId: cur.owner_person_id ? Number(cur.owner_person_id) : null };
+    const newOwner = who.name;
     const due = validDate(c.fecha_limite) ?? cur.due_date;
     await db.query(
-      `UPDATE tasks SET status = $2, owner = $3, due_date = $4, last_meeting_id = $5, updated_at = now(),
+      `UPDATE tasks SET status = $2, owner = $3, owner_person_id = $4, due_date = $5, last_meeting_id = $6,
+         updated_at = now(),
          closed_at = CASE WHEN $2 IN ('completada','cancelada') THEN COALESCE(closed_at, now()) END
        WHERE id = $1`,
-      [c.tarea_id, status, owner, due, meetingId],
+      [c.tarea_id, status, newOwner, who.personId, due, meetingId],
     );
     if (status !== cur.status) {
       await logChange(db, { ...base, entity: "tarea", entityId: c.tarea_id, entityTitle: cur.title,
@@ -196,7 +232,7 @@ export async function applyAnalysis(
       res.statusChanges++;
     }
     const details = [
-      owner !== cur.owner ? `Responsable: ${cur.owner ?? "sin asignar"} → ${owner}` : null,
+      newOwner !== cur.owner ? `Responsable: ${cur.owner ?? "sin asignar"} → ${newOwner}` : null,
       due !== cur.due_date ? `Fecha límite: ${cur.due_date ?? "sin fecha"} → ${due}` : null,
     ].filter(Boolean);
     if (details.length || status === cur.status) {
@@ -216,8 +252,10 @@ export async function processMeeting(meetingId: number): Promise<void> {
   try {
     const m = await one<{
       project_id: string; title: string; date: string; transcript: string; recorder_summary: string | null;
+      participants_hint: string | null;
     }>(
-      `SELECT project_id, title, to_char(meeting_date, 'YYYY-MM-DD') AS date, transcript, recorder_summary
+      `SELECT project_id, title, to_char(meeting_date, 'YYYY-MM-DD') AS date, transcript, recorder_summary,
+              participants_hint
        FROM meetings WHERE id = $1`,
       [meetingId],
     );
@@ -228,6 +266,7 @@ export async function processMeeting(meetingId: number): Promise<void> {
     const ctx = await loadProjectContext(projectId, pool());
     const analysis = await analyzeMeeting(ctx, {
       title: m.title, date: m.date, transcript: m.transcript, recorderSummary: m.recorder_summary,
+      participantsHint: m.participants_hint,
     });
 
     await tx(async (db) => {

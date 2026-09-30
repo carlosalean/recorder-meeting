@@ -36,6 +36,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_WORKSPACE_ID: ${ANTHROPIC_WORKSPACE_ID:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+      OWNER_NAME: ${OWNER_NAME:-}
+      OWNER_ROLE: ${OWNER_ROLE:-}
       REUNIONES_DIR: /reuniones
       TZ: ${TZ:-Europe/Madrid}
     volumes:
