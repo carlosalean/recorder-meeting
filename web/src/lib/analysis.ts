@@ -113,7 +113,7 @@ encajen; crea temas nuevos solo cuando haga falta.
 - En evidencia, pon la marca de tiempo y una cita breve que justifique el cambio.
 - Personas: incluye en participantes a quienes asisten y a quienes tienen un papel relevante (responsables \
 de tareas, decisores, contactos del cliente...). Si coincide con una persona conocida ([P..]) usa su ID, \
-aunque el nombre aparezca abreviado o mal transcrito; crea una nueva solo si no existe. Si se indican \
+aunque el nombre aparezca abreviado, mal transcrito o como uno de sus alias ("también: ..."); crea una nueva solo si no existe. Si se indican \
 participantes al subir la reunión, dales prioridad. Usa en "responsable" de las tareas el mismo nombre que \
 en participantes.
 - En resumen_en_proyecto y perfil, conserva lo que ya se sabía y añade lo nuevo; no borres información útil.
@@ -128,6 +128,12 @@ export type KnownPerson = {
   role: string | null;      // papel en este proyecto
   summary: string | null;   // qué hace en este proyecto
   inProject: boolean;
+  aliases?: string[];
+  department?: string | null;
+  level?: string | null;     // nivel jerárquico (texto legible)
+  influence?: string | null; // capacidad de decisión (texto legible)
+  reportsTo?: string | null;
+  notes?: string | null;     // notas del usuario
 };
 
 export type ProjectContext = {
@@ -159,15 +165,22 @@ export function renderContext(ctx: ProjectContext): string {
   const others = people.filter((p) => !p.inProject);
   lines.push("", "PERSONAS DEL PROYECTO:");
   if (!inProject.length) lines.push("(ninguna registrada todavía)");
+  const aka = (p: KnownPerson) => (p.aliases?.length ? ` (también: ${p.aliases.join(", ")})` : "");
   for (const p of inProject) {
-    const head = [p.name, p.company, p.job_title].filter(Boolean).join(" — ");
-    lines.push(`[P${p.id}] ${head}${p.role ? ` | papel: ${p.role}` : ""}`);
+    const head = [p.name, p.company, p.job_title, p.department].filter(Boolean).join(" — ");
+    lines.push(`[P${p.id}] ${head}${aka(p)}${p.role ? ` | papel: ${p.role}` : ""}`);
+    const org = [p.level && `nivel: ${p.level}`, p.influence && `influencia: ${p.influence}`,
+      p.reportsTo && `reporta a: ${p.reportsTo}`].filter(Boolean).join(" | ");
+    if (org) lines.push(`   ${org}`);
     if (p.summary) lines.push(`   en el proyecto: ${clean(p.summary)}`);
     if (p.profile) lines.push(`   perfil: ${clean(p.profile)}`);
+    if (p.notes) lines.push(`   notas del usuario: ${clean(p.notes)}`);
   }
   if (others.length) {
     lines.push("", "OTRAS PERSONAS CONOCIDAS (de otros proyectos):");
-    for (const p of others) lines.push(`[P${p.id}] ${[p.name, p.company, p.job_title].filter(Boolean).join(" — ")}`);
+    for (const p of others) {
+      lines.push(`[P${p.id}] ${[p.name, p.company, p.job_title].filter(Boolean).join(" — ")}${aka(p)}`);
+    }
   }
   lines.push("", "ESTADO ACTUAL DE TEMAS Y TAREAS:");
   if (!ctx.topics.length) lines.push("(todavía no hay temas: es la primera reunión registrada)");

@@ -143,11 +143,14 @@ export const processingCount = () =>
 export type PersonRow = {
   id: string; name: string; company: string | null; job_title: string | null; email: string | null;
   phone: string | null; notes: string | null; ai_profile: string | null; updated_at: Date;
+  aliases: string[]; department: string | null; hierarchy_level: string | null; influence: string | null;
+  reports_to_id: string | null; reports_to_name: string | null; linkedin: string | null;
   project_count: number; open_tasks: number; last_meeting: Date | null;
 };
 
 const PERSON_SELECT = `
   SELECT p.*,
+    (SELECT b.name FROM people b WHERE b.id = p.reports_to_id) AS reports_to_name,
     (SELECT count(*)::int FROM project_people pp WHERE pp.person_id = p.id) AS project_count,
     (SELECT count(*)::int FROM tasks k WHERE k.owner_person_id = p.id
        AND k.status NOT IN ('completada','cancelada')) AS open_tasks,
@@ -211,3 +214,7 @@ export const meetingPeople = (meetingId: string) =>
      WHERE mp.meeting_id = $1 ORDER BY lower(p.name)`,
     [meetingId],
   );
+
+export const personTeam = (personId: string) =>
+  query<{ id: string; name: string; job_title: string | null }>(
+    "SELECT id, name, job_title FROM people WHERE reports_to_id = $1 ORDER BY lower(name)", [personId]);

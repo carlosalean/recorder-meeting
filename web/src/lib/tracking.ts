@@ -2,7 +2,9 @@ import type { PoolClient } from "pg";
 import { analyzeMeeting, type Analysis, type ProjectContext } from "./analysis";
 import { type Db, one, pool, query, tx } from "./db";
 import { applyParticipants } from "./people";
-import { TASK_STATUSES, type TaskStatus, TOPIC_STATUSES, type TopicStatus, isClosedTask } from "./status";
+import {
+  PERSON_SHORT, TASK_STATUSES, type TaskStatus, TOPIC_STATUSES, type TopicStatus, isClosedTask,
+} from "./status";
 
 const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 export const normTaskStatus = (s: string | null | undefined): TaskStatus | null =>
@@ -62,9 +64,13 @@ export async function loadProjectContext(projectId: number, db: Db): Promise<Pro
   );
   const people = await query<{
     id: string; name: string; company: string | null; job_title: string | null; ai_profile: string | null;
-    role: string | null; summary: string | null; in_project: boolean;
+    role: string | null; summary: string | null; in_project: boolean; aliases: string[];
+    department: string | null; hierarchy_level: string | null; influence: string | null;
+    reports_to: string | null; notes: string | null;
   }>(
-    `SELECT p.id, p.name, p.company, p.job_title, p.ai_profile, pp.role, pp.summary,
+    `SELECT p.id, p.name, p.company, p.job_title, p.ai_profile, pp.role, pp.summary, p.aliases, p.department,
+            p.hierarchy_level, p.influence, p.notes,
+            (SELECT b.name FROM people b WHERE b.id = p.reports_to_id) AS reports_to,
             pp.person_id IS NOT NULL AS in_project
      FROM people p LEFT JOIN project_people pp ON pp.person_id = p.id AND pp.project_id = $1
      ORDER BY in_project DESC, p.updated_at DESC LIMIT 400`,
@@ -77,7 +83,10 @@ export async function loadProjectContext(projectId: number, db: Db): Promise<Pro
     aiSummary: project.ai_summary,
     people: people.map((p) => ({
       id: Number(p.id), name: p.name, company: p.company, job_title: p.job_title, profile: p.ai_profile,
-      role: p.role, summary: p.summary, inProject: p.in_project,
+      role: p.role, summary: p.summary, inProject: p.in_project, aliases: p.aliases,
+      department: p.department, reportsTo: p.reports_to, notes: p.notes,
+      level: p.hierarchy_level ? PERSON_SHORT[p.hierarchy_level] : null,
+      influence: p.influence ? PERSON_SHORT[p.influence] : null,
     })),
     topics: topics.map((t) => ({
       id: Number(t.id),

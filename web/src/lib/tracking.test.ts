@@ -193,6 +193,48 @@ describe.skipIf(!url)("personas", () => {
   });
 });
 
+describe.skipIf(!url)("unificar personas", () => {
+  beforeEach(async () => {
+    await query("TRUNCATE clients, people RESTART IDENTITY CASCADE");
+  });
+
+  it("une varias fichas, conserva relaciones y guarda los nombres como alias", async () => {
+    const { mergePeople } = await import("./people");
+    const { projectId, meetingId } = await seed();
+    const ids: string[] = [];
+    for (const n of ["Ana García", "Ana", "Ana Garsia", "Jefa", "Becario"]) {
+      ids.push((await one<{ id: string }>("INSERT INTO people (name) VALUES ($1) RETURNING id", [n]))!.id);
+    }
+    const [main, dup1, dup2, boss, intern] = ids;
+    await query("UPDATE people SET reports_to_id = $1 WHERE id = $2", [dup1, intern]); // depende de la ficha duplicada
+    await query("INSERT INTO project_people (project_id, person_id, role) VALUES ($1, $2, 'PO')", [projectId, dup1]);
+    await query("INSERT INTO meeting_people (meeting_id, person_id) VALUES ($1, $2)", [meetingId, dup2]);
+    const topic = await one<{ id: string }>("INSERT INTO topics (project_id, title) VALUES ($1, 'T') RETURNING id", [projectId]);
+    await query("INSERT INTO tasks (topic_id, title, owner_person_id) VALUES ($1, 'x', $2)", [topic!.id, dup2]);
+
+    await tx((db) => mergePeople(db, main, [dup1, dup2], {
+      name: "Ana García", company: "ACME", job_title: "Product Owner", department: "Producto",
+      hierarchy_level: "gerencia", influence: "decisor", reports_to_id: boss, email: null, phone: null,
+      linkedin: null, notes: "Prefiere reuniones por la mañana", ai_profile: null,
+    }));
+
+    expect(await query("SELECT id FROM people ORDER BY id")).toEqual([{ id: main }, { id: boss }, { id: intern }]);
+    expect(await one("SELECT aliases, hierarchy_level, influence, reports_to_id FROM people WHERE id = $1", [main]))
+      .toEqual({ aliases: ["Ana", "Ana Garsia"], hierarchy_level: "gerencia", influence: "decisor", reports_to_id: boss });
+    expect(await one("SELECT reports_to_id FROM people WHERE id = $1", [intern])).toEqual({ reports_to_id: main });
+    expect(await one("SELECT role FROM project_people WHERE person_id = $1", [main])).toEqual({ role: "PO" });
+    expect(await one("SELECT count(*)::int AS n FROM meeting_people WHERE person_id = $1", [main])).toEqual({ n: 1 });
+    expect(await one("SELECT count(*)::int AS n FROM tasks WHERE owner_person_id = $1", [main])).toEqual({ n: 1 });
+
+    // En la siguiente reunión, la IA (o un responsable) usa un alias: se reconoce a la persona.
+    const res = await tx((db) => applyAnalysis(db, projectId, meetingId, {
+      ...empty,
+      participantes: [persona({ nombre: "Ana Garsia", resumen_en_proyecto: "" })],
+    }));
+    expect(res.newPeople).toBe(0);
+  });
+});
+
 describe("normTaskStatus", () => {
   it("acepta variantes y rechaza valores desconocidos", async () => {
     const { normTaskStatus } = await import("./tracking");

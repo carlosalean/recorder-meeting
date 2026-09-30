@@ -259,8 +259,15 @@ se conservan aunque pares o actualices los contenedores.
 5. **Personas**: listado lateral agrupado por empresa, con buscador. Al pulsar en
    una persona ves quién es, sus datos de contacto, en qué proyectos participa (de
    qué va cada uno y cuál es su papel), sus acciones y las reuniones en las que
-   estuvo. Puedes corregir sus datos y **unir fichas duplicadas** (p. ej. «Ana» y
-   «Ana García»).
+   estuvo. En cada ficha puedes completar el contexto: departamento, **nivel
+   jerárquico**, **influencia en las decisiones** (decisor, influyente…), **a quién
+   reporta** (con su equipo en el organigrama), LinkedIn y **notas importantes**.
+   Todo esto también lo recibe la IA al analizar las reuniones.
+   - **Unificar duplicados**: la app detecta fichas que parecen la misma persona
+     (mismo nombre, «Ana» / «Ana García», errores de transcripción, mismo email).
+     Eliges las fichas, comparas sus datos, decides qué conservar y añades
+     contexto. Los demás nombres quedan como **alias**, para que la IA la reconozca
+     en próximas reuniones y no vuelva a duplicarla.
 6. **Panel**: la vista general. Puedes cambiar el estado de una tarea directamente
    desde el desplegable; en la página del proyecto (✎) puedes editar o borrar
    temas y tareas y añadirlos a mano.

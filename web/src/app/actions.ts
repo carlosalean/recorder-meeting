@@ -5,8 +5,10 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { one, pool, query, tx } from "@/lib/db";
 import { readRecording } from "@/lib/recordings";
-import { PROJECT_STATUSES, TASK_STATUSES, TOPIC_STATUSES } from "@/lib/status";
-import { applyParticipants, createPerson } from "@/lib/people";
+import {
+  HIERARCHY_LEVELS, INFLUENCE_LEVELS, PROJECT_STATUSES, TASK_STATUSES, TOPIC_STATUSES,
+} from "@/lib/status";
+import { applyParticipants, createPerson, mergePeople } from "@/lib/people";
 import { logChange, processMeeting, validDate } from "@/lib/tracking";
 import type { PoolClient } from "pg";
 
@@ -23,6 +25,8 @@ const required = (fd: FormData, k: string, label: string) => {
 };
 const oneOf = <T extends string>(v: string | null, list: readonly T[], def: T): T =>
   v && (list as readonly string[]).includes(v) ? (v as T) : def;
+
+const inList = (v: string | null, list: readonly string[]) => (v && list.includes(v) ? v : null);
 
 class UserError extends Error {}
 
@@ -338,23 +342,34 @@ export async function deleteMeeting(_: FormState, fd: FormData): Promise<FormSta
 
 // --------------------------------------------------------------------------- Personas
 
+function personValues(fd: FormData) {
+  const reports = str(fd, "reports_to_id");
+  return {
+    name: required(fd, "name", "El nombre"),
+    company: str(fd, "company"), job_title: str(fd, "job_title"), department: str(fd, "department"),
+    hierarchy_level: inList(str(fd, "hierarchy_level"), HIERARCHY_LEVELS),
+    influence: inList(str(fd, "influence"), INFLUENCE_LEVELS),
+    reports_to_id: reports && /^\d+$/.test(reports) ? reports : null,
+    email: str(fd, "email"), phone: str(fd, "phone"), linkedin: str(fd, "linkedin"),
+    notes: str(fd, "notes"), ai_profile: str(fd, "ai_profile"),
+  };
+}
+
 export async function savePerson(_: FormState, fd: FormData): Promise<FormState> {
   let newId: number | undefined;
   const res = await run(async () => {
     const id = str(fd, "id");
-    const v = {
-      name: required(fd, "name", "El nombre"), company: str(fd, "company"), job_title: str(fd, "job_title"),
-      email: str(fd, "email"), phone: str(fd, "phone"),
-    };
-    if (id) {
-      await query(
-        `UPDATE people SET name=$2, company=$3, job_title=$4, email=$5, phone=$6, notes=$7, ai_profile=$8,
-           updated_at=now() WHERE id=$1`,
-        [id, v.name, v.company, v.job_title, v.email, v.phone, str(fd, "notes"), str(fd, "ai_profile")]);
-    } else {
-      newId = await createPerson(pool(), v);
-      if (str(fd, "notes")) await query("UPDATE people SET notes=$2 WHERE id=$1", [newId, str(fd, "notes")]);
-    }
+    const v = personValues(fd);
+    if (id && v.reports_to_id === id) throw new UserError("Una persona no puede reportarse a sí misma");
+    const aliases = (str(fd, "aliases") ?? "").split(/[,;\n]/).map((a) => a.trim()).filter(Boolean);
+    if (!id) newId = await createPerson(pool(), { name: v.name });
+    await query(
+      `UPDATE people SET name=$2, company=$3, job_title=$4, department=$5, hierarchy_level=$6, influence=$7,
+         reports_to_id=$8, email=$9, phone=$10, linkedin=$11, notes=$12, ai_profile=COALESCE($13, ai_profile),
+         aliases=$14, updated_at=now()
+       WHERE id=$1`,
+      [id ?? newId, v.name, v.company, v.job_title, v.department, v.hierarchy_level, v.influence,
+       v.reports_to_id, v.email, v.phone, v.linkedin, v.notes, v.ai_profile, aliases]);
   });
   if (newId) redirect(`/personas?id=${newId}`);
   return res;
@@ -367,32 +382,15 @@ export async function deletePerson(_: FormState, fd: FormData): Promise<FormStat
   redirect("/personas");
 }
 
-/** Une dos fichas de la misma persona (p. ej. "Ana" y "Ana García"). */
-export async function mergePeople(_: FormState, fd: FormData): Promise<FormState> {
-  const into = required(fd, "id", "id");
-  const from = required(fd, "merge_from", "La persona a unir");
-  if (into === from) return { error: "Elige otra persona" };
-  await run(async () => {
-    await tx(async (db) => {
-      await db.query("UPDATE tasks SET owner_person_id = $1 WHERE owner_person_id = $2", [into, from]);
-      await db.query(
-        `INSERT INTO project_people (project_id, person_id, role, summary)
-           SELECT project_id, $1, role, summary FROM project_people WHERE person_id = $2
-         ON CONFLICT (project_id, person_id) DO UPDATE SET
-           role = COALESCE(project_people.role, EXCLUDED.role),
-           summary = CONCAT_WS(' ', project_people.summary, EXCLUDED.summary)`,
-        [into, from]);
-      await db.query(
-        `INSERT INTO meeting_people (meeting_id, person_id) SELECT meeting_id, $1 FROM meeting_people
-         WHERE person_id = $2 ON CONFLICT DO NOTHING`, [into, from]);
-      await db.query(
-        `UPDATE people i SET company = COALESCE(i.company, f.company), job_title = COALESCE(i.job_title, f.job_title),
-           email = COALESCE(i.email, f.email), phone = COALESCE(i.phone, f.phone),
-           notes = NULLIF(CONCAT_WS(E'\\n', i.notes, f.notes), ''),
-           ai_profile = NULLIF(CONCAT_WS(' ', i.ai_profile, f.ai_profile), ''), updated_at = now()
-         FROM people f WHERE i.id = $1 AND f.id = $2`, [into, from]);
-      await db.query("DELETE FROM people WHERE id = $1", [from]);
-    });
+/** Une varias fichas de la misma persona con los valores elegidos en /personas/unificar. */
+export async function unifyPeople(_: FormState, fd: FormData): Promise<FormState> {
+  const ids = fd.getAll("ids").map(String).filter((x) => /^\d+$/.test(x));
+  const main = str(fd, "main");
+  if (ids.length < 2 || !main || !ids.includes(main)) return { error: "Elige al menos dos fichas y la principal" };
+  const res = await run(async () => {
+    const v = personValues(fd);
+    await tx((db) => mergePeople(db, main, ids, v));
   });
-  redirect(`/personas?id=${into}`);
+  if (res?.error) return res;
+  redirect(`/personas?id=${main}`);
 }

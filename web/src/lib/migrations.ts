@@ -157,6 +157,19 @@ const MIGRATIONS: { id: string; sql: string }[] = [
         WHERE k.owner_person_id IS NOT NULL;
     `,
   },
+  {
+    id: "003_personas_contexto",
+    sql: `
+      ALTER TABLE people
+        ADD COLUMN aliases         text[] NOT NULL DEFAULT '{}',  -- otros nombres (fichas unificadas, apodos)
+        ADD COLUMN department      text,
+        ADD COLUMN hierarchy_level text,    -- ver HIERARCHY_LEVELS
+        ADD COLUMN influence       text,    -- ver INFLUENCE_LEVELS
+        ADD COLUMN reports_to_id   bigint REFERENCES people(id) ON DELETE SET NULL,
+        ADD COLUMN linkedin        text;
+      CREATE INDEX ON people (reports_to_id);
+    `,
+  },
 ];
 
 export async function migrate(): Promise<void> {

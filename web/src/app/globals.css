@@ -300,3 +300,28 @@ table.list td.actions { text-align: right; width: 1%; }
   .people-side { position: static; max-height: 320px; }
 }
 .project-head > .pill { align-self: flex-start; }
+
+/* ---------- Unificar / contexto de personas ---------- */
+.head-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pill.warn { background: var(--warn-soft); color: var(--warn); margin-left: 6px; }
+.alert.warn { border-color: var(--warn); background: var(--warn-soft); }
+.dup-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.tags { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.pill.inf-decisor { background: var(--bad-soft); color: var(--bad); }
+.pill.inf-influyente { background: var(--warn-soft); color: var(--warn); }
+.pill.inf-participante { background: var(--accent-soft); color: var(--accent); }
+.two-col.equal { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 16px; }
+.two-col.equal > .card { margin-bottom: 0; }
+.notes { background: var(--warn-soft); border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+.notes p { margin: 4px 0 0; white-space: pre-wrap; }
+.org { display: flex; flex-direction: column; gap: 4px; }
+.org .person-link { padding: 4px 0; }
+.org .small.muted { margin-top: 6px; }
+.pick-list.tall { max-height: 420px; }
+.compare th, .compare td { min-width: 160px; }
+.compare thead th { vertical-align: bottom; text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--text); }
+.compare thead th a { display: block; font-size: 1rem; margin-top: 4px; }
+.compare tbody th { width: 150px; }
+.choices { font-size: 11.5px; color: var(--muted); }
+@media (max-width: 1000px) { .two-col.equal { grid-template-columns: 1fr; } }
+.compare-wrap { overflow-x: auto; }
