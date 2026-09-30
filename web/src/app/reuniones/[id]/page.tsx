@@ -6,7 +6,7 @@ import { ChangeList } from "@/components/changes";
 import { ActionForm, Submit } from "@/components/forms";
 import { Badge, Md, fmtDateTime } from "@/components/ui";
 import { getMeeting, listChanges, meetingPeople } from "@/lib/queries";
-import { initials } from "@/lib/format";
+import { SOURCE_LABEL, initials } from "@/lib/format";
 
 export default async function MeetingPage({ params }: PageProps<"/reuniones/[id]">) {
   const { id } = await params;
@@ -25,7 +25,7 @@ export default async function MeetingPage({ params }: PageProps<"/reuniones/[id]
           </div>
           <h1>{m.title} {m.status !== "procesada" && <Badge status={m.status} />}</h1>
           <div className="muted small">
-            {fmtDateTime(m.meeting_date)} · {m.source === "grabadora" ? `🎙️ ${m.source_path}` : "📝 añadida manualmente"}
+            {fmtDateTime(m.meeting_date)} · {SOURCE_LABEL[m.source] ?? m.source}{m.source_path ? ` · ${m.source_path.replace(/^(correo|doc):/, "")}` : ""}
           </div>
         </div>
         <ActionForm action={deleteMeeting}
@@ -76,7 +76,7 @@ export default async function MeetingPage({ params }: PageProps<"/reuniones/[id]
             </details>
           )}
           <details className="card">
-            <summary><strong>Transcripción completa</strong></summary>
+            <summary><strong>{m.source === "correo" ? "Correos del hilo" : m.source === "documento" ? "Texto del documento" : "Transcripción completa"}</strong></summary>
             <pre className="transcript">{m.transcript}</pre>
           </details>
         </div>

@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { askStructured } from "./analysis";
 import { one, query, tx } from "./db";
-import { listRecordings, readRecording } from "./recordings";
+import { DOC_PREFIX, listDocuments } from "./documents";
+import { THREAD_PREFIX, threadText } from "./emails";
+import { listRecordings } from "./recordings";
+import { SOURCE_NATURE, type SourceKind, loadSource } from "./sources";
 import { processMeeting } from "./tracking";
 
 /**
@@ -114,15 +117,15 @@ async function setTriage(folder: string, fields: {
 }
 
 /**
- * Crea una reunión por proyecto a partir de una grabación. Si son varios proyectos,
- * cada reunión lleva una nota de alcance para que la IA solo trate su parte.
- * Devuelve los IDs de las reuniones creadas (las ya existentes se omiten).
+ * Crea una reunión por proyecto a partir de una fuente (grabación, hilo de correo o
+ * documento). Si son varios proyectos, cada reunión lleva una nota de alcance para
+ * que la IA solo trate su parte. Devuelve los IDs creados (los ya existentes se omiten).
  */
-export async function createMeetingsFromRecording(
-  folder: string,
+export async function createMeetingsFromSource(
+  key: string,
   assign: { project_id: string; scope?: string | null }[],
 ): Promise<number[]> {
-  const rec = await readRecording(folder);
+  const src = await loadSource(key);
   const names = new Map(
     (await query<{ id: string; name: string }>(
       "SELECT id, name FROM projects WHERE id = ANY($1::bigint[])", [assign.map((a) => a.project_id)],
@@ -132,16 +135,17 @@ export async function createMeetingsFromRecording(
     const ids: number[] = [];
     for (const a of assign) {
       const others = assign.filter((x) => x.project_id !== a.project_id).map((x) => `"${names.get(x.project_id)}"`);
-      const scope = others.length
-        ? `Esta reunión trató varios proyectos (también ${others.join(", ")}). Ocúpate SOLO de lo relativo ` +
+      const multi = others.length
+        ? `Esta fuente trata varios proyectos (también ${others.join(", ")}). Ocúpate SOLO de lo relativo ` +
           `a "${names.get(a.project_id)}"${a.scope ? `: ${a.scope}` : ""}. Ignora lo demás.`
         : null;
+      const scope = [SOURCE_NATURE[src.kind], multi].filter(Boolean).join(" ") || null;
       const row = await one<{ id: string }>(
         `INSERT INTO meetings (project_id, title, meeting_date, transcript, recorder_summary, source,
                                source_path, audio_file, status, scope_note)
-         VALUES ($1,$2,$3,$4,$5,'grabadora',$6,$7,'procesando',$8)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'procesando',$9)
          ON CONFLICT (source_path, project_id) DO NOTHING RETURNING id`,
-        [a.project_id, rec.title, rec.date ?? new Date(), rec.transcript, rec.summary, folder, rec.audio, scope],
+        [a.project_id, src.title, src.date ?? new Date(), src.text, src.summary, src.kind, key, src.audio, scope],
         db,
       );
       if (row) ids.push(Number(row.id));
@@ -150,33 +154,110 @@ export async function createMeetingsFromRecording(
   });
 }
 
-/** Clasifica una grabación y, si la IA lo tiene claro, la asigna y la procesa. */
-export async function triageRecording(folder: string): Promise<void> {
+/** Aplica la decisión de la IA: guarda las sugerencias y, si está clara, asigna y procesa. */
+async function applyDecision(key: string, result: Triage, validIds: Set<string>) {
+  const decision = decide(result, validIds);
+  await setTriage(key, {
+    status: decision.status, suggestions: decision.suggestions, new_project: result.proyecto_nuevo,
+    summary: result.resumen,
+  });
+  if (decision.status === "asignada") {
+    const ids = await createMeetingsFromSource(key, decision.assign);
+    for (const id of ids) await processMeeting(id);
+  }
+}
+
+const LABEL: Record<SourceKind, string> = { grabadora: "REUNIÓN", correo: "HILO DE CORREO", documento: "DOCUMENTO" };
+
+/** Clasifica una fuente y, si la IA lo tiene claro, la asigna y la procesa. */
+export async function triageSource(key: string): Promise<void> {
   try {
-    await setTriage(folder, { status: "clasificando" });
-    const [rec, catalog] = await Promise.all([readRecording(folder), loadCatalog()]);
+    await setTriage(key, { status: "clasificando" });
+    const [src, catalog] = await Promise.all([loadSource(key), loadCatalog()]);
+    // Para clasificar basta con una parte generosa del texto.
+    const text = src.text.length > 60_000 ? `${src.text.slice(0, 40_000)}\n[…]\n${src.text.slice(-20_000)}` : src.text;
     const user = [
       renderCatalog(catalog),
       "",
-      `REUNIÓN: "${rec.title}"${rec.date ? ` — fecha: ${rec.date.toISOString().slice(0, 10)}` : ""}`,
-      rec.summary ? `\n<resumen_previo>\n${rec.summary}\n</resumen_previo>` : "",
-      `\n<transcripcion>\n${rec.transcript}\n</transcripcion>`,
+      `${LABEL[src.kind]}: "${src.title}"${src.date ? ` — fecha: ${src.date.toISOString().slice(0, 10)}` : ""}`,
+      src.kind !== "grabadora" ? SOURCE_NATURE[src.kind] ?? "" : "",
+      src.summary ? `\n<resumen_previo>\n${src.summary}\n</resumen_previo>` : "",
+      `\n<contenido>\n${text}\n</contenido>`,
     ].join("\n");
     const result = await askStructured(TriageSchema, SYSTEM, user, { effort: "medium", maxTokens: 16000 });
-    const decision = decide(result, new Set(catalog.map((p) => p.id)));
-    await setTriage(folder, {
-      status: decision.status, suggestions: decision.suggestions, new_project: result.proyecto_nuevo,
-      summary: result.resumen,
-    });
-    if (decision.status === "asignada") {
-      const ids = await createMeetingsFromRecording(folder, decision.assign);
-      for (const id of ids) await processMeeting(id);
-    }
+    await applyDecision(key, result, new Set(catalog.map((p) => p.id)));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(`[clasificación ${folder}]`, e);
-    await setTriage(folder, { status: "error", error: msg }).catch(() => {});
+    console.error(`[clasificación ${key}]`, e);
+    await setTriage(key, { status: "error", error: msg }).catch(() => {});
   }
+}
+
+// Nombres anteriores (grabaciones).
+export const triageRecording = triageSource;
+export const createMeetingsFromRecording = createMeetingsFromSource;
+
+// ---------------------------------------------------------------------------
+// Correos: clasificación por lotes (muchos hilos en una sola consulta)
+// ---------------------------------------------------------------------------
+
+const BatchSchema = z.object({
+  hilos: z.array(TriageSchema.extend({ hilo: z.string().describe("Identificador del hilo, p. ej. 'H3'") })),
+});
+
+/**
+ * Clasifica hilos de correo pendientes en lotes de `batchSize` (un resumen de cada
+ * hilo por consulta, para que el coste sea asumible con miles de correos).
+ * Los hilos asignados con seguridad se procesan después uno a uno.
+ */
+export async function triageEmailThreads(opts: { limit?: number; batchSize?: number } = {}): Promise<number> {
+  const limit = opts.limit ?? 200, batchSize = opts.batchSize ?? 20;
+  const catalog = await loadCatalog();
+  if (!catalog.length) return 0;
+  const pending = await query<{ thread_key: string }>(
+    `SELECT e.thread_key FROM emails e
+     WHERE NOT EXISTS (SELECT 1 FROM recording_triage t WHERE t.folder = $1 || e.thread_key AND t.status <> 'error')
+       AND NOT EXISTS (SELECT 1 FROM meetings m WHERE m.source_path = $1 || e.thread_key)
+     GROUP BY e.thread_key ORDER BY max(e.sent_at) DESC NULLS LAST LIMIT $2`,
+    [THREAD_PREFIX, limit]);
+  const valid = new Set(catalog.map((p) => p.id));
+  let done = 0;
+  for (let i = 0; i < pending.length; i += batchSize) {
+    const batch = pending.slice(i, i + batchSize);
+    const keys = batch.map((b) => THREAD_PREFIX + b.thread_key);
+    for (const k of keys) await setTriage(k, { status: "clasificando" });
+    try {
+      const blocks: string[] = [];
+      for (const [j, b] of batch.entries()) {
+        const t = await threadText(b.thread_key);
+        const excerpt = t.text.length > 2500 ? `${t.text.slice(0, 900)}\n[…]\n${t.text.slice(-1600)}` : t.text;
+        blocks.push(`=== [H${j + 1}] ${t.subject} (${t.count} correos) ===\n${excerpt}`);
+      }
+      const user = [
+        renderCatalog(catalog), "",
+        "Clasifica CADA uno de estos HILOS DE CORREO por separado. Devuelve un elemento en 'hilos' por cada " +
+          "[H..], con su identificador. Los correos que no tengan que ver con ningún proyecto (publicidad, " +
+          "trámites internos, notificaciones…) van con la lista de proyectos vacía.",
+        "", blocks.join("\n\n"),
+      ].join("\n");
+      const res = await askStructured(BatchSchema, SYSTEM, user, { effort: "low", maxTokens: 32000 });
+      const byId = new Map(res.hilos.map((h) => [h.hilo.replace(/[^\d]/g, ""), h]));
+      for (const [j, key] of keys.entries()) {
+        const h = byId.get(String(j + 1));
+        if (!h) {
+          await setTriage(key, { status: "error", error: "La IA no devolvió este hilo" });
+          continue;
+        }
+        await applyDecision(key, h, valid);
+        done++;
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[clasificación de correos]", e);
+      for (const k of keys) await setTriage(k, { status: "error", error: msg }).catch(() => {});
+    }
+  }
+  return done;
 }
 
 const state = globalThis as unknown as { __scanRunning?: boolean; __scanTimer?: NodeJS.Timeout };
@@ -186,8 +267,13 @@ export async function scanRecordings(opts: { retryErrors?: boolean } = {}): Prom
   if (state.__scanRunning) return 0;
   state.__scanRunning = true;
   try {
-    const { available, items } = await listRecordings();
-    if (!available) return 0;
+    const [recs, docs] = await Promise.all([listRecordings(), listDocuments()]);
+    // Grabaciones y documentos (de más antiguo a más reciente, para que los estados evolucionen en orden).
+    const items = [
+      ...recs.items.map((r) => ({ key: r.folder, date: r.date })),
+      ...docs.files.map((d) => ({ key: DOC_PREFIX + d.path, date: d.modified })),
+    ].sort((a, b) => a.date.getTime() - b.date.getTime());
+    if (!items.length) return 0;
     const imported = new Set((await query<{ source_path: string }>(
       "SELECT DISTINCT source_path FROM meetings WHERE source_path IS NOT NULL")).map((r) => r.source_path));
     const newest = await one<{ n: number; last: Date | null }>(
@@ -196,16 +282,15 @@ export async function scanRecordings(opts: { retryErrors?: boolean } = {}): Prom
     const triaged = new Map((await query<{ folder: string; status: string; updated_at: Date }>(
       "SELECT folder, status, updated_at FROM recording_triage")).map((r) => [r.folder, r]));
     let n = 0;
-    // De la más antigua a la más reciente: así los estados de las tareas evolucionan en orden.
-    for (const r of [...items].reverse()) {
-      if (imported.has(r.folder)) continue;
-      const t = triaged.get(r.folder);
+    for (const r of items) {
+      if (imported.has(r.key)) continue;
+      const t = triaged.get(r.key);
       // Se reintentan las que no encajaban en ningún proyecto si desde entonces se ha creado alguno.
       const retry = t && (
         (opts.retryErrors && (t.status === "error" || t.status === "clasificando")) ||
         (t.status === "sin_proyecto" && newest.last && newest.last > t.updated_at));
       if (t && !retry) continue;
-      await triageRecording(r.folder);
+      await triageSource(r.key);
       n++;
     }
     return n;

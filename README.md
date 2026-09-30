@@ -287,6 +287,48 @@ se conservan aunque pares o actualices los contenedores.
 Si el análisis falla (sin conexión, clave incorrecta…), la reunión queda marcada
 con **Error** y un botón **Reintentar**.
 
+### Correos de Outlook (.pst)
+
+1. En Outlook: *Archivo → Abrir y exportar → Importar o exportar → Exportar a un
+   archivo → Archivo de datos de Outlook (.pst)*; elige tu buzón (con subcarpetas).
+2. Guarda el `.pst` en la carpeta `CORREOS_DIR` de tu `.env` y reinicia con
+   `docker compose up -d`.
+3. En **Correos**: elige desde qué fecha importar y pulsa *Importar* (se omiten
+   papelera, spam, calendario, contactos y remitentes automáticos; reimportar no
+   duplica). Después, *Clasificar con IA*: la IA revisa los hilos por lotes, asigna
+   los claros a su proyecto (extrayendo tareas, compromisos y personas) y deja los
+   dudosos para que los confirmes.
+
+> Cada hilo asignado se analiza con la IA como si fuera una reunión: con miles de
+> correos el coste de la API sube. Empieza por los últimos meses y limita cuántos
+> hilos clasificas cada vez.
+
+### Documentos y OneNote
+
+Deja en `DOCUMENTOS_DIR` documentos PDF, Word (`.docx`), `.mht`, HTML o texto. La
+app los revisa automáticamente como las grabaciones: un documento puede repartirse
+entre varios proyectos (p. ej. una tabla de seguimiento con varias filas).
+
+**Exportar OneNote** (el bloc de notas de un canal de Teams):
+1. En Teams, abre la pestaña del bloc de notas → *Abrir en la aplicación de
+   escritorio* (OneNote para Microsoft 365).
+2. En OneNote de escritorio: selecciona la **sección** (o la página) → *Archivo →
+   Exportar* → *Sección* → formato **PDF** (o **Documento de Word** para una
+   página) → guárdalo en `DOCUMENTOS_DIR`.
+3. Si solo tienes OneNote web: abre la página → *Archivo → Imprimir* → *Guardar como
+   PDF*.
+
+> Revisa lo que exportas: si una página contiene accesos o credenciales, no la
+> incluyas; el texto de los documentos se envía a la API de Claude.
+
+### Reorganizar con IA
+
+En **Reorganizar**, la IA revisa todos los proyectos (o los de un cliente) y
+propone cambios: temas o tareas en el proyecto equivocado, reuniones mal
+asignadas, temas o proyectos duplicados y títulos que no reflejan su contenido.
+Marca las propuestas que quieras y pulsa *Aplicar*; cada cambio queda en el
+historial de los proyectos afectados.
+
 ### Comandos útiles
 
 ```powershell
@@ -327,7 +369,11 @@ TEST_DATABASE_URL=postgres://...  npm test  # los tests usan (y vacían) esa bas
 | `web/src/lib/migrations.ts` | Esquema de PostgreSQL (se aplica solo al arrancar) |
 | `web/src/lib/analysis.ts` | Prompt y llamada a Claude con salida estructurada |
 | `web/src/lib/tracking.ts` | Aplica el resultado de la IA a temas/tareas y registra el historial |
-| `web/src/lib/triage.ts` | Asignación automática de grabaciones a proyectos |
+| `web/src/lib/triage.ts` | Asignación automática de fuentes (grabaciones, correos, documentos) a proyectos |
+| `web/src/lib/sources.ts` | Carga de cualquier fuente como texto para la IA |
+| `web/src/lib/emails.ts` | Importación de `.pst` y agrupación en hilos |
+| `web/src/lib/documents.ts` | Lectura de PDF, Word, `.mht` (OneNote), HTML y texto |
+| `web/src/lib/reorg.ts` | Reorganización de proyectos con IA |
 | `web/src/lib/people.ts` | Alta, actualización y resolución de personas (responsables, participantes) |
 | `web/src/lib/recordings.ts` | Lee las carpetas de la grabadora |
 | `web/src/app/actions.ts` | Acciones del servidor (crear, editar, asignar reuniones…) |

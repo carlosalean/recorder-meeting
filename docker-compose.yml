@@ -40,10 +40,15 @@ services:
       OWNER_ROLE: ${OWNER_ROLE:-}
       AUTO_ASSIGN_MINUTES: ${AUTO_ASSIGN_MINUTES:-5}
       REUNIONES_DIR: /reuniones
+      CORREOS_DIR: /correos
+      DOCUMENTOS_DIR: /documentos
       TZ: ${TZ:-Europe/Madrid}
     volumes:
       # Carpeta donde la grabadora guarda las reuniones (solo lectura).
       - ${REUNIONES_DIR:-./reuniones}:/reuniones:ro
+      # Exportaciones de Outlook (.pst) y documentos (OneNote, actas…), solo lectura.
+      - ${CORREOS_DIR:-./correos}:/correos:ro
+      - ${DOCUMENTOS_DIR:-./documentos}:/documentos:ro
     ports:
       - "${WEB_PORT:-3000}:3000"
 

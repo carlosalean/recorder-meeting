@@ -11,7 +11,10 @@ import {
 import { applyParticipants, createPerson, mergePeople } from "@/lib/people";
 import { logChange, processMeeting, validDate } from "@/lib/tracking";
 import { applyProposal, runReorg } from "@/lib/reorg";
-import { createMeetingsFromRecording, scanRecordings, triageRecording, type Suggestion } from "@/lib/triage";
+import { importPst } from "@/lib/emails";
+import {
+  createMeetingsFromRecording, scanRecordings, triageEmailThreads, triageRecording, type Suggestion,
+} from "@/lib/triage";
 import type { PoolClient } from "pg";
 
 export type FormState = { error?: string; ok?: number } | undefined;
@@ -459,5 +462,46 @@ export async function applyReorg(_: FormState, fd: FormData): Promise<FormState>
       "SELECT id, kind FROM reorg_proposals WHERE id = ANY($1::bigint[]) AND status = 'pendiente' ORDER BY id", [ids]);
     const order = (k: string) => (k === "fusionar_proyectos" ? 2 : k === "fusionar_temas" ? 1 : 0);
     for (const r of rows.sort((a, b) => order(a.kind) - order(b.kind))) await applyProposal(Number(r.id));
+  });
+}
+
+// --------------------------------------------------------------------------- Correos y documentos
+
+/** Importa un .pst en segundo plano (solo correos desde la fecha indicada). */
+export async function importEmails(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const file = required(fd, "file", "El archivo");
+    const since = validDate(str(fd, "since"));
+    const busy = await one("SELECT 1 FROM email_sources WHERE status = 'importando' AND imported_at > now() - interval '2 hours'");
+    if (busy) throw new UserError("Ya hay una importación en curso; espera a que termine");
+    await query(
+      `INSERT INTO email_sources (file, status, since) VALUES ($1, 'importando', $2)
+       ON CONFLICT (file) DO UPDATE SET status = 'importando', since = $2, error = NULL, imported_at = now()`,
+      [file, since]);
+    after(() => importPst(file, since ? new Date(since) : null));
+  });
+}
+
+/** Clasifica con IA (por lotes) los hilos de correo pendientes. */
+export async function classifyEmails(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const limit = Math.min(Math.max(Number(str(fd, "limit") ?? 100) || 100, 1), 2000);
+    after(() => triageEmailThreads({ limit }));
+  });
+}
+
+/** Asigna a mano una fuente (hilo de correo o documento) a un proyecto y la procesa. */
+export async function assignSource(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const key = required(fd, "folder", "La fuente");
+    const projectId = required(fd, "project_id", "El proyecto");
+    await query(
+      `INSERT INTO recording_triage (folder, status) VALUES ($1, 'asignada')
+       ON CONFLICT (folder) DO UPDATE SET status = 'asignada', updated_at = now()`, [key]);
+    const ids = await createMeetingsFromRecording(key, [{ project_id: projectId }]);
+    if (!ids.length) throw new UserError("Ya estaba asignada a ese proyecto");
+    after(async () => {
+      for (const id of ids) await processMeeting(id);
+    });
   });
 }

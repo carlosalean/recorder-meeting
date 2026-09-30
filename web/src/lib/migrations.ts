@@ -222,6 +222,40 @@ const MIGRATIONS: { id: string; sql: string }[] = [
         CHECK (action IN ('creado', 'estado', 'actualizado', 'eliminado', 'movido'));
     `,
   },
+  {
+    id: "006_correos_documentos",
+    sql: `
+      -- Otras fuentes además de las grabaciones: hilos de correo y documentos (p. ej. OneNote).
+      ALTER TABLE meetings DROP CONSTRAINT meetings_source_check;
+      ALTER TABLE meetings ADD CONSTRAINT meetings_source_check
+        CHECK (source IN ('grabadora', 'manual', 'correo', 'documento'));
+
+      CREATE TABLE email_sources (
+        file        text PRIMARY KEY,           -- ruta del .pst relativa a CORREOS_DIR
+        status      text NOT NULL CHECK (status IN ('importando', 'importado', 'error')),
+        since       date,                       -- solo se importan correos desde esta fecha
+        emails      int NOT NULL DEFAULT 0,
+        error       text,
+        imported_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE emails (
+        id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        source_file text NOT NULL,
+        message_key text NOT NULL UNIQUE,       -- Message-ID o huella del correo
+        thread_key  text NOT NULL,              -- asunto normalizado: agrupa el hilo
+        subject     text NOT NULL,
+        from_name   text,
+        from_email  text,
+        to_text     text,
+        cc_text     text,
+        sent_at     timestamptz,
+        folder      text,
+        body        text NOT NULL
+      );
+      CREATE INDEX ON emails (thread_key, sent_at);
+    `,
+  },
 ];
 
 export async function migrate(): Promise<void> {

@@ -7,7 +7,7 @@ import { ChangeList } from "@/components/changes";
 import { ActionForm, Submit } from "@/components/forms";
 import { ParticipantsPicker } from "@/components/participants";
 import { Badge, Empty, Md, fmtDate, fmtDateTime } from "@/components/ui";
-import { initials } from "@/lib/format";
+import { SOURCE_LABEL, initials } from "@/lib/format";
 import {
   getBoard, getProject, importedFolders, listChanges, listClients, listMeetings, listPeople, projectPeople,
 } from "@/lib/queries";
@@ -172,7 +172,7 @@ export default async function ProjectPage({ params }: PageProps<"/proyectos/[id]
                 <li key={m.id}>
                   <Link href={`/reuniones/${m.id}`}>{m.title}</Link>
                   <div className="small muted">
-                    {fmtDateTime(m.meeting_date)} · {m.source === "grabadora" ? "🎙️ grabadora" : "📝 manual"}
+                    {fmtDateTime(m.meeting_date)} · {SOURCE_LABEL[m.source] ?? m.source}
                     {m.status === "procesada" && ` · ${m.changes} cambios`}
                   </div>
                   {m.status !== "procesada" && <Badge status={m.status} />}
