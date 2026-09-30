@@ -46,9 +46,11 @@ services:
     volumes:
       # Carpeta donde la grabadora guarda las reuniones (solo lectura).
       - ${REUNIONES_DIR:-./reuniones}:/reuniones:ro
-      # Exportaciones de Outlook (.pst) y documentos (OneNote, actas…), solo lectura.
+      # Exportaciones de Outlook (.pst), solo lectura.
       - ${CORREOS_DIR:-./correos}:/correos:ro
-      - ${DOCUMENTOS_DIR:-./documentos}:/documentos:ro
+      # Documentos (OneNote exportado a PDF, actas…). Con escritura para poder subirlos
+      # desde la web (se guardan en la subcarpeta Subidos).
+      - ${DOCUMENTOS_DIR:-./documentos}:/documentos
     ports:
       - "${WEB_PORT:-3000}:3000"
 

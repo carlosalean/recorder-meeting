@@ -92,7 +92,8 @@ describe.skipIf(!url)("importación y clasificación de correos", () => {
     const c = await one<{ id: string }>("INSERT INTO clients (name) VALUES ('Enron') RETURNING id");
     const p = await one<{ id: string }>("INSERT INTO projects (client_id, name) VALUES ($1, 'Capacidad gas') RETURNING id", [c!.id]);
     const pid = Number(p!.id);
-    vi.mocked(askStructured).mockImplementation(async (_s, _sys, user: string) => {
+    vi.mocked(askStructured).mockImplementation(async (_s, _sys, input) => {
+      const user = String(input);
       const n = (user.match(/=== \[H\d+\]/g) ?? []).length;
       return {
         hilos: Array.from({ length: n }, (_, i) => ({
@@ -121,11 +122,11 @@ describe.skipIf(!url)("importación y clasificación de correos", () => {
     expect(vi.mocked(askStructured).mock.calls[0][2]).not.toContain("=== [H6]");
   });
 
-  it("la revisión automática también clasifica documentos", async () => {
-    vi.mocked(askStructured).mockReset().mockResolvedValue({ resumen: "doc", proyectos: [], proyecto_nuevo: null });
+  it("la revisión automática también analiza los documentos", async () => {
+    vi.mocked(askStructured).mockReset().mockResolvedValue({ resumen: "doc", proyectos: [] });
     expect(await scanRecordings()).toBe(2);
-    expect(await query("SELECT folder FROM recording_triage WHERE folder LIKE 'doc:%' ORDER BY folder")).toEqual([
-      { folder: "doc:OneNote/Seguimiento.html" }, { folder: "doc:notas.txt" },
+    expect(await query("SELECT source_key, status FROM doc_plans ORDER BY source_key")).toEqual([
+      { source_key: "doc:OneNote/Seguimiento.html", status: "lista" }, { source_key: "doc:notas.txt", status: "lista" },
     ]);
     expect(vi.mocked(askStructured).mock.calls[0][2]).toContain("DOCUMENTO");
   });

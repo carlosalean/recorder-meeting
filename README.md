@@ -305,9 +305,33 @@ con **Error** y un botón **Reintentar**.
 
 ### Documentos y OneNote
 
-Deja en `DOCUMENTOS_DIR` documentos PDF, Word (`.docx`), `.mht`, HTML o texto. La
-app los revisa automáticamente como las grabaciones: un documento puede repartirse
-entre varios proyectos (p. ej. una tabla de seguimiento con varias filas).
+Sube documentos PDF, Word (`.docx`), `.mht`, HTML o texto desde la página
+**Documentos** (se guardan en `DOCUMENTOS_DIR/Subidos`) o déjalos directamente en
+`DOCUMENTOS_DIR`: la app los revisa automáticamente, igual que las grabaciones.
+
+Para cada documento, la IA lee todas sus páginas y prepara una **propuesta**:
+- qué proyectos trata, **existentes o nuevos**, con su cliente (también nuevo si
+  hace falta) y una descripción de cada uno;
+- qué **páginas** corresponden a cada proyecto. Cada proyecto recibe solo sus
+  páginas. Una página, por ejemplo una tabla resumen, puede ir a varios.
+
+Si todo encaja con seguridad en proyectos que ya existen, se incorpora sola. Si
+propone crear proyectos o clientes, o duda, te enseña la propuesta:
+1. Marca lo que quieras.
+2. Corrige los nombres si hace falta.
+3. Pulsa *Incorporar y analizar*.
+
+Al incorporarlo, la IA completa la descripción del proyecto, sus temas, tareas y
+personas (con cargo, empresa y contacto si aparecen). Todo ello se trata como
+cualquier otra reunión del proyecto.
+
+Los **PDF escaneados**, o con el texto como imagen, se leen con la IA página a
+página, hasta 100 páginas por archivo. El texto extraído se guarda para no volver
+a leerlos.
+
+> Para subir documentos desde la web, el volumen `/documentos` de
+> `docker-compose.yml` debe tener permiso de escritura (sin `:ro`, como viene por
+> defecto).
 
 **Exportar OneNote** (el bloc de notas de un canal de Teams):
 1. En Teams, abre la pestaña del bloc de notas → *Abrir en la aplicación de
@@ -372,7 +396,8 @@ TEST_DATABASE_URL=postgres://...  npm test  # los tests usan (y vacían) esa bas
 | `web/src/lib/triage.ts` | Asignación automática de fuentes (grabaciones, correos, documentos) a proyectos |
 | `web/src/lib/sources.ts` | Carga de cualquier fuente como texto para la IA |
 | `web/src/lib/emails.ts` | Importación de `.pst` y agrupación en hilos |
-| `web/src/lib/documents.ts` | Lectura de PDF, Word, `.mht` (OneNote), HTML y texto |
+| `web/src/lib/documents.ts` | Lectura por páginas de PDF (también escaneados, con IA), Word, `.mht` (OneNote), HTML y texto |
+| `web/src/lib/docplan.ts` | Propuesta de la IA para repartir un documento entre proyectos (existentes o nuevos) |
 | `web/src/lib/reorg.ts` | Reorganización de proyectos con IA |
 | `web/src/lib/people.ts` | Alta, actualización y resolución de personas (responsables, participantes) |
 | `web/src/lib/recordings.ts` | Lee las carpetas de la grabadora |

@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import type { BetaContentBlockParam } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { z } from "zod";
 import { TASK_STATUSES, TOPIC_STATUSES } from "./status";
 
@@ -208,7 +209,7 @@ export function anthropicClient(): Anthropic {
 export async function askStructured<S extends z.ZodType>(
   schema: S,
   system: string,
-  user: string,
+  user: string | BetaContentBlockParam[],
   opts: { effort?: "low" | "medium" | "high"; maxTokens?: number; client?: Anthropic } = {},
 ): Promise<z.infer<S>> {
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {

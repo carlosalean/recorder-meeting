@@ -39,22 +39,22 @@ export const ReorgSchema = z.object({
 export type ReorgResult = z.infer<typeof ReorgSchema>;
 export type Proposal = ReorgResult["propuestas"][number];
 
-const SYSTEM = `Eres el responsable de ORDENAR la base de conocimiento de proyectos de un profesional que \\
-trabaja para varios clientes. La información (temas, tareas y reuniones) se ha ido generando automáticamente \\
+const SYSTEM = `Eres el responsable de ORDENAR la base de conocimiento de proyectos de un profesional que \
+trabaja para varios clientes. La información (temas, tareas y reuniones) se ha ido generando automáticamente \
 a partir de transcripciones de reuniones y a veces queda en el sitio equivocado.
 
 Revisa el catálogo completo y propón cambios concretos:
 - mover_tema: un tema (con todas sus tareas) pertenece a otro proyecto.
-- mover_tarea: una tarea está en un tema o proyecto que no le corresponde. Indica tema_destino_id, o bien \\
+- mover_tarea: una tarea está en un tema o proyecto que no le corresponde. Indica tema_destino_id, o bien \
 proyecto_destino_id + nuevo_titulo para crear un tema nuevo en ese proyecto.
 - mover_reunion: una reunión se asignó al proyecto equivocado.
-- fusionar_temas: varios temas del MISMO asunto (duplicados). El primero de temas_ids se conserva; puedes \\
+- fusionar_temas: varios temas del MISMO asunto (duplicados). El primero de temas_ids se conserva; puedes \
 darle nuevo_titulo.
 - fusionar_proyectos: dos proyectos son en realidad el mismo. proyecto_origen_id se absorbe en proyecto_destino_id.
 - renombrar_tema: el título no refleja su contenido.
 
-Reglas: sé conservador y concreto; cada propuesta debe apoyarse en información clara del catálogo \\
-(nombres, cliente, contenido de las tareas o reuniones). No propongas cambios cosméticos ni por matices. \\
+Reglas: sé conservador y concreto; cada propuesta debe apoyarse en información clara del catálogo \
+(nombres, cliente, contenido de las tareas o reuniones). No propongas cambios cosméticos ni por matices. \
 Si todo está bien organizado, devuelve la lista vacía. Usa los IDs exactamente como aparecen. Escribe en español.`;
 
 type CatalogTopic = { id: string; project_id: string; title: string; description: string | null; status: string };

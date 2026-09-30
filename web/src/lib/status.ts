@@ -51,3 +51,6 @@ export const PERSON_SHORT: Record<string, string> = {
   mando_intermedio: "Mando intermedio", tecnico: "Técnico", operativo: "Operativo", externo: "Externo",
   decisor: "Decisor", influyente: "Influyente", participante: "Participante", informado: "Informado",
 };
+
+/** Confianza de la IA al asignar una fuente a un proyecto. */
+export const CONFIDENCES = ["alta", "media", "baja"] as const;

@@ -256,6 +256,29 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       CREATE INDEX ON emails (thread_key, sent_at);
     `,
   },
+  {
+    id: "007_documentos_ia",
+    sql: `
+      -- Texto extraído de cada documento, por páginas (evita repetir la lectura con IA de PDFs escaneados).
+      CREATE TABLE document_cache (
+        path       text PRIMARY KEY,           -- ruta relativa a DOCUMENTOS_DIR
+        mtime      timestamptz NOT NULL,
+        size       bigint NOT NULL,
+        pages      jsonb NOT NULL,             -- array de textos, uno por página
+        method     text NOT NULL CHECK (method IN ('texto', 'ia')),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      -- Plan de la IA para repartir un documento entre proyectos (existentes o nuevos).
+      CREATE TABLE doc_plans (
+        source_key text PRIMARY KEY,           -- "doc:<ruta>"
+        status     text NOT NULL CHECK (status IN ('analizando', 'lista', 'aplicada', 'descartada', 'error')),
+        plan       jsonb,
+        error      text,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+    `,
+  },
 ];
 
 export async function migrate(): Promise<void> {
@@ -289,6 +312,10 @@ export async function migrate(): Promise<void> {
     await client.query(
       `UPDATE recording_triage SET status = 'error', error = 'Clasificación interrumpida (el servidor se reinició).'
        WHERE status = 'clasificando'`,
+    );
+    await client.query(
+      `UPDATE doc_plans SET status = 'error', error = 'Análisis interrumpido (el servidor se reinició).'
+       WHERE status = 'analizando'`,
     );
   } finally {
     await client.query("SELECT pg_advisory_unlock(727274)").catch(() => {});

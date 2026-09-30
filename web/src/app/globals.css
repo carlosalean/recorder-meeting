@@ -349,3 +349,13 @@ details.manual { margin-top: 8px; padding-top: 6px; }
 .tag.k-mover_tema, .tag.k-mover_tarea { background: var(--accent-soft); color: var(--accent); }
 .tag.k-fusionar_temas { background: var(--info-soft); color: var(--info); }
 .tag.a-movido { background: var(--info-soft); color: var(--info); }
+
+/* ---------- Documentos ---------- */
+.upload input[type="file"] { max-width: 100%; }
+.plan-item { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.plan-item:last-of-type { border-bottom: none; }
+.plan-new { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 24px; }
+.plan-new label { display: flex; flex-direction: column; gap: 2px; flex: 1 1 160px; }
+.plan-new p { flex-basis: 100%; margin: 0; }
+.tag.new { background: var(--accent-soft); color: var(--accent); }
+.block { display: block; }

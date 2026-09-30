@@ -12,6 +12,8 @@ import { applyParticipants, createPerson, mergePeople } from "@/lib/people";
 import { logChange, processMeeting, validDate } from "@/lib/tracking";
 import { applyProposal, runReorg } from "@/lib/reorg";
 import { importPst } from "@/lib/emails";
+import { DOC_PREFIX, saveUploadedDocument } from "@/lib/documents";
+import { applyDocPlan, discardDocPlan, runDocPlan } from "@/lib/docplan";
 import {
   createMeetingsFromRecording, scanRecordings, triageEmailThreads, triageRecording, type Suggestion,
 } from "@/lib/triage";
@@ -500,6 +502,75 @@ export async function assignSource(_: FormState, fd: FormData): Promise<FormStat
        ON CONFLICT (folder) DO UPDATE SET status = 'asignada', updated_at = now()`, [key]);
     const ids = await createMeetingsFromRecording(key, [{ project_id: projectId }]);
     if (!ids.length) throw new UserError("Ya estaba asignada a ese proyecto");
+    after(async () => {
+      for (const id of ids) await processMeeting(id);
+    });
+  });
+}
+
+// --------------------------------------------------------------------------- Documentos
+
+/** Sube documentos (PDF, Word…) a la carpeta de documentos y los analiza con IA. */
+export async function uploadDocuments(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const files = fd.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
+    if (!files.length) throw new UserError("Elige al menos un archivo");
+    const keys: string[] = [];
+    for (const f of files) {
+      try {
+        keys.push(DOC_PREFIX + await saveUploadedDocument(f.name, Buffer.from(await f.arrayBuffer())));
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === "EROFS" || code === "EACCES") {
+          throw new UserError("La carpeta de documentos es de solo lectura. Quita ':ro' del volumen /documentos en " +
+            "docker-compose.yml y reinicia con 'docker compose up -d'");
+        }
+        if (e instanceof Error && e.message.startsWith("Formato no admitido")) throw new UserError(e.message);
+        throw e;
+      }
+    }
+    for (const k of keys) {
+      await query(
+        `INSERT INTO doc_plans (source_key, status) VALUES ($1, 'analizando')
+         ON CONFLICT (source_key) DO UPDATE SET status = 'analizando', error = NULL, updated_at = now()`, [k]);
+    }
+    after(async () => {
+      for (const k of keys) await runDocPlan(k);
+    });
+  });
+}
+
+/** (Re)analiza un documento con IA: propone a qué proyectos (existentes o nuevos) incorporarlo. */
+export async function analyzeDocument(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const key = required(fd, "key", "El documento");
+    const auto = str(fd, "auto") !== "0";
+    await query(
+      `INSERT INTO doc_plans (source_key, status) VALUES ($1, 'analizando')
+       ON CONFLICT (source_key) DO UPDATE SET status = 'analizando', error = NULL, updated_at = now()`, [key]);
+    after(() => runDocPlan(key, { auto }));
+  });
+}
+
+/** Aplica las propuestas marcadas del plan de un documento (o lo descarta con op=descartar). */
+export async function applyDocumentPlan(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const key = required(fd, "key", "El documento");
+    if (str(fd, "op") === "descartar") {
+      await discardDocPlan(key);
+      return;
+    }
+    const choices = fd.getAll("item").map(String).filter((x) => /^\d+$/.test(x)).map((x) => ({
+      index: Number(x), name: str(fd, `name_${x}`), client_name: str(fd, `client_${x}`),
+    }));
+    if (!choices.length) throw new UserError("Marca al menos un proyecto");
+    let ids: number[];
+    try {
+      ids = await applyDocPlan(key, choices);
+    } catch (e) {
+      if (e instanceof Error && !("code" in e)) throw new UserError(e.message);
+      throw e;
+    }
     after(async () => {
       for (const id of ids) await processMeeting(id);
     });

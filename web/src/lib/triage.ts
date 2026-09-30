@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { askStructured } from "./analysis";
+import { CONFIDENCES } from "./status";
 import { one, query, tx } from "./db";
 import { DOC_PREFIX, listDocuments } from "./documents";
 import { THREAD_PREFIX, threadText } from "./emails";
 import { listRecordings } from "./recordings";
 import { SOURCE_NATURE, type SourceKind, loadSource } from "./sources";
 import { processMeeting } from "./tracking";
+import { runDocPlan } from "./docplan";
 
 /**
  * Asignación automática de grabaciones a proyectos.
@@ -17,7 +19,7 @@ import { processMeeting } from "./tracking";
  * cada una limitada a su parte de la conversación.
  */
 
-export const CONFIDENCES = ["alta", "media", "baja"] as const;
+export { CONFIDENCES } from "./status";
 
 export const TriageSchema = z.object({
   resumen: z.string().describe("De qué trata la reunión, en una o dos frases"),
@@ -38,19 +40,19 @@ export const TriageSchema = z.object({
 });
 export type Triage = z.infer<typeof TriageSchema>;
 
-const SYSTEM = `Eres el CLASIFICADOR de reuniones de un profesional que trabaja en varios proyectos para \\
-distintos clientes. Recibirás un catálogo de proyectos y la transcripción automática de una reunión. \\
+const SYSTEM = `Eres el CLASIFICADOR de reuniones de un profesional que trabaja en varios proyectos para \
+distintos clientes. Recibirás un catálogo de proyectos y la transcripción automática de una reunión. \
 Tu trabajo es decir a qué proyecto o proyectos pertenece.
 
 Criterios de confianza:
-- "alta": no hay duda razonable. Se nombra el proyecto o el cliente, o se tratan temas abiertos de ese \\
+- "alta": no hay duda razonable. Se nombra el proyecto o el cliente, o se tratan temas abiertos de ese \
 proyecto, o participan personas claramente ligadas a él y el contenido encaja.
 - "media": encaja bastante pero falta alguna confirmación (p. ej. solo coinciden algunos temas genéricos).
 - "baja": posible pero dudoso.
 Sé conservador: una asignación errónea contamina el seguimiento del proyecto. Ante la duda, no uses "alta".
 
-Si en la reunión se tratan de forma sustancial varios proyectos, inclúyelos todos, cada uno con su alcance. \\
-No incluyas proyectos que solo se mencionan de pasada. Si no encaja ninguno, devuelve la lista vacía. \\
+Si en la reunión se tratan de forma sustancial varios proyectos, inclúyelos todos, cada uno con su alcance. \
+No incluyas proyectos que solo se mencionan de pasada. Si no encaja ninguno, devuelve la lista vacía. \
 Escribe en español y usa los IDs exactamente como aparecen.`;
 
 type CatalogProject = {
@@ -123,7 +125,7 @@ async function setTriage(folder: string, fields: {
  */
 export async function createMeetingsFromSource(
   key: string,
-  assign: { project_id: string; scope?: string | null }[],
+  assign: { project_id: string; scope?: string | null; text?: string | null }[],
 ): Promise<number[]> {
   const src = await loadSource(key);
   const names = new Map(
@@ -145,7 +147,7 @@ export async function createMeetingsFromSource(
                                source_path, audio_file, status, scope_note)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'procesando',$9)
          ON CONFLICT (source_path, project_id) DO NOTHING RETURNING id`,
-        [a.project_id, src.title, src.date ?? new Date(), src.text, src.summary, src.kind, key, src.audio, scope],
+        [a.project_id, src.title, src.date ?? new Date(), a.text || src.text, src.summary, src.kind, key, src.audio, scope],
         db,
       );
       if (row) ids.push(Number(row.id));
@@ -262,28 +264,40 @@ export async function triageEmailThreads(opts: { limit?: number; batchSize?: num
 
 const state = globalThis as unknown as { __scanRunning?: boolean; __scanTimer?: NodeJS.Timeout };
 
-/** Clasifica las grabaciones nuevas (sin proyecto ni clasificación previa). */
+/**
+ * Clasifica las grabaciones nuevas (sin proyecto ni clasificación previa) y prepara
+ * el plan de los documentos nuevos (que pueden proponer proyectos nuevos).
+ */
 export async function scanRecordings(opts: { retryErrors?: boolean } = {}): Promise<number> {
   if (state.__scanRunning) return 0;
   state.__scanRunning = true;
   try {
     const [recs, docs] = await Promise.all([listRecordings(), listDocuments()]);
-    // Grabaciones y documentos (de más antiguo a más reciente, para que los estados evolucionen en orden).
+    // De más antiguo a más reciente, para que los estados evolucionen en orden.
     const items = [
-      ...recs.items.map((r) => ({ key: r.folder, date: r.date })),
-      ...docs.files.map((d) => ({ key: DOC_PREFIX + d.path, date: d.modified })),
+      ...recs.items.map((r) => ({ key: r.folder, date: r.date, doc: false })),
+      ...docs.files.map((d) => ({ key: DOC_PREFIX + d.path, date: d.modified, doc: true })),
     ].sort((a, b) => a.date.getTime() - b.date.getTime());
     if (!items.length) return 0;
     const imported = new Set((await query<{ source_path: string }>(
       "SELECT DISTINCT source_path FROM meetings WHERE source_path IS NOT NULL")).map((r) => r.source_path));
     const newest = await one<{ n: number; last: Date | null }>(
       "SELECT count(*)::int AS n, max(created_at) AS last FROM projects WHERE status <> 'cerrado'");
-    if (!newest?.n) return 0; // sin proyectos no hay nada a lo que asignar
     const triaged = new Map((await query<{ folder: string; status: string; updated_at: Date }>(
       "SELECT folder, status, updated_at FROM recording_triage")).map((r) => [r.folder, r]));
+    const plans = new Map((await query<{ source_key: string; status: string }>(
+      "SELECT source_key, status FROM doc_plans")).map((r) => [r.source_key, r.status]));
     let n = 0;
     for (const r of items) {
       if (imported.has(r.key)) continue;
+      if (r.doc) {
+        const p = plans.get(r.key);
+        if (p && !(opts.retryErrors && p === "error")) continue;
+        await runDocPlan(r.key);
+        n++;
+        continue;
+      }
+      if (!newest?.n) continue; // sin proyectos no hay nada a lo que asignar las grabaciones
       const t = triaged.get(r.key);
       // Se reintentan las que no encajaban en ningún proyecto si desde entonces se ha creado alguno.
       const retry = t && (
