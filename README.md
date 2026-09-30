@@ -268,6 +268,18 @@ La base de datos también es accesible desde tu PC (DBeaver, pgAdmin…) en
 `localhost:5433`, base de datos `meetings`, usuario `meetings`, contraseña la de
 `POSTGRES_PASSWORD` (por defecto `meetings`).
 
+### Si algo falla
+
+- **La página muestra un error o no carga**: comprueba `docker compose ps` (el
+  servicio `db` debe estar *healthy*) y mira `docker compose logs web`. La app
+  reintenta la conexión con la base de datos sola; basta con recargar.
+- **Error de contraseña en el log** (`password authentication failed`): cambiaste
+  `POSTGRES_PASSWORD` después de crear la base de datos. Vuelve a la contraseña
+  anterior o, si no te importa perder los datos, bórrala con
+  `docker compose down -v` y arranca de nuevo.
+- **La página Grabaciones no encuentra la carpeta**: revisa `REUNIONES_DIR` en
+  `.env` (con barras `/`) y ejecuta `docker compose up -d` para aplicarlo.
+
 ### Desarrollo del panel
 
 ```bash

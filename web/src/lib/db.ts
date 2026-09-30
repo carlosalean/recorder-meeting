@@ -13,24 +13,43 @@ export function pool(): Pool {
 
 export type Db = Pick<PoolClient, "query">;
 
+const state = globalThis as unknown as { __schemaReady?: Promise<void> };
+
+/**
+ * Garantiza que el esquema está migrado antes de la primera consulta.
+ * Si falla (p. ej. la base de datos aún está arrancando), se reintentará en la
+ * siguiente petición en lugar de dejar el servidor roto.
+ */
+export function ensureSchema(): Promise<void> {
+  state.__schemaReady ??= import("./migrations")
+    .then((m) => m.migrate())
+    .catch((e) => {
+      state.__schemaReady = undefined;
+      throw e;
+    });
+  return state.__schemaReady;
+}
+
 export async function query<T extends QueryResultRow>(
   sql: string,
   params: unknown[] = [],
-  db: Db = pool(),
+  db?: Db,
 ): Promise<T[]> {
-  const res = await db.query<T>(sql, params);
+  if (!db) await ensureSchema();
+  const res = await (db ?? pool()).query<T>(sql, params);
   return res.rows;
 }
 
 export async function one<T extends QueryResultRow>(
   sql: string,
   params: unknown[] = [],
-  db: Db = pool(),
+  db?: Db,
 ): Promise<T | undefined> {
   return (await query<T>(sql, params, db))[0];
 }
 
 export async function tx<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
+  await ensureSchema();
   const client = await pool().connect();
   try {
     await client.query("BEGIN");
