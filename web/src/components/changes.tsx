@@ -12,6 +12,10 @@ const ACTION: Record<string, string> = {
   "eliminado tema": "Tema eliminado",
   "eliminado tarea": "Tarea eliminada",
   "creado persona": "Nueva persona",
+  "movido tema": "Tema movido",
+  "movido tarea": "Tarea movida",
+  "movido reunion": "Reunión movida",
+  "movido proyecto": "Proyecto fusionado",
 };
 
 export function ChangeList({ changes, showMeeting = true }: { changes: ChangeRow[]; showMeeting?: boolean }) {

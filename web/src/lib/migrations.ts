@@ -191,6 +191,37 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       );
     `,
   },
+  {
+    id: "005_reorganizacion",
+    sql: `
+      CREATE TABLE reorg_runs (
+        id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        status     text NOT NULL CHECK (status IN ('analizando', 'lista', 'error')),
+        diagnosis  text,
+        error      text,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE reorg_proposals (
+        id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        run_id     bigint NOT NULL REFERENCES reorg_runs(id) ON DELETE CASCADE,
+        kind       text NOT NULL,
+        payload    jsonb NOT NULL,
+        reason     text NOT NULL,
+        status     text NOT NULL DEFAULT 'pendiente'
+                   CHECK (status IN ('pendiente', 'aplicada', 'descartada', 'error')),
+        error      text,
+        applied_at timestamptz
+      );
+      CREATE INDEX ON reorg_proposals (run_id);
+
+      ALTER TABLE changes DROP CONSTRAINT changes_entity_check;
+      ALTER TABLE changes ADD CONSTRAINT changes_entity_check
+        CHECK (entity IN ('tema', 'tarea', 'persona', 'reunion', 'proyecto'));
+      ALTER TABLE changes DROP CONSTRAINT changes_action_check;
+      ALTER TABLE changes ADD CONSTRAINT changes_action_check
+        CHECK (action IN ('creado', 'estado', 'actualizado', 'eliminado', 'movido'));
+    `,
+  },
 ];
 
 export async function migrate(): Promise<void> {

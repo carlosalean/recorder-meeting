@@ -24,6 +24,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/personas">Personas</Link>
             <Link href="/clientes">Clientes</Link>
             <Link href="/grabaciones">Grabaciones</Link>
+            <Link href="/reorganizar">Reorganizar</Link>
           </nav>
         </header>
         <main className="container">{children}</main>

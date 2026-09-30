@@ -338,3 +338,14 @@ table.list td.actions { text-align: right; width: 1%; }
 .pill.conf-baja { background: var(--surface-2); color: var(--muted); }
 details.manual { margin-top: 8px; padding-top: 6px; }
 .assigned { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+
+/* ---------- Reorganizar ---------- */
+.reorg-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.reorg-list li { padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.reorg-list li:last-child { border-bottom: none; }
+.reorg-list label.check { align-items: flex-start; font-size: 14px; }
+.reorg-list label.check input { margin-top: 4px; }
+.tag.k-fusionar_proyectos, .tag.k-mover_reunion { background: var(--warn-soft); color: var(--warn); }
+.tag.k-mover_tema, .tag.k-mover_tarea { background: var(--accent-soft); color: var(--accent); }
+.tag.k-fusionar_temas { background: var(--info-soft); color: var(--info); }
+.tag.a-movido { background: var(--info-soft); color: var(--info); }

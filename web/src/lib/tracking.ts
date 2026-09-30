@@ -15,10 +15,10 @@ const normTopicStatus = (s: string | null | undefined): TopicStatus | null =>
 type Change = {
   projectId: number;
   meetingId: number | null;
-  entity: "tema" | "tarea" | "persona";
+  entity: "tema" | "tarea" | "persona" | "reunion" | "proyecto";
   entityId: number;
   entityTitle: string;
-  action: "creado" | "estado" | "actualizado" | "eliminado";
+  action: "creado" | "estado" | "actualizado" | "eliminado" | "movido";
   oldStatus?: string | null;
   newStatus?: string | null;
   note?: string | null;

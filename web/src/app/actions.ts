@@ -10,6 +10,7 @@ import {
 } from "@/lib/status";
 import { applyParticipants, createPerson, mergePeople } from "@/lib/people";
 import { logChange, processMeeting, validDate } from "@/lib/tracking";
+import { applyProposal, runReorg } from "@/lib/reorg";
 import { createMeetingsFromRecording, scanRecordings, triageRecording, type Suggestion } from "@/lib/triage";
 import type { PoolClient } from "pg";
 
@@ -430,5 +431,33 @@ export async function confirmTriage(_: FormState, fd: FormData): Promise<FormSta
     after(async () => {
       for (const id of ids) await processMeeting(id);
     });
+  });
+}
+
+// --------------------------------------------------------------------------- Reorganización con IA
+
+export async function startReorg(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const clientId = str(fd, "client_id") ?? undefined;
+    const busy = await one("SELECT id FROM reorg_runs WHERE status = 'analizando' AND created_at > now() - interval '30 minutes'");
+    if (busy) throw new UserError("Ya hay un análisis en curso");
+    const r = await one<{ id: string }>("INSERT INTO reorg_runs (status) VALUES ('analizando') RETURNING id");
+    after(() => runReorg(Number(r!.id), clientId));
+  });
+}
+
+export async function applyReorg(_: FormState, fd: FormData): Promise<FormState> {
+  return run(async () => {
+    const ids = fd.getAll("proposal").map(String).filter((x) => /^\d+$/.test(x));
+    if (!ids.length) throw new UserError("Marca al menos una propuesta");
+    if (str(fd, "op") === "descartar") {
+      await query("UPDATE reorg_proposals SET status = 'descartada' WHERE id = ANY($1::bigint[]) AND status = 'pendiente'", [ids]);
+      return;
+    }
+    // En orden: fusiones de proyectos al final para no invalidar otras propuestas antes de aplicarlas.
+    const rows = await query<{ id: string; kind: string }>(
+      "SELECT id, kind FROM reorg_proposals WHERE id = ANY($1::bigint[]) AND status = 'pendiente' ORDER BY id", [ids]);
+    const order = (k: string) => (k === "fusionar_proyectos" ? 2 : k === "fusionar_temas" ? 1 : 0);
+    for (const r of rows.sort((a, b) => order(a.kind) - order(b.kind))) await applyProposal(Number(r.id));
   });
 }
