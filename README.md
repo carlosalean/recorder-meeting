@@ -85,6 +85,30 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 > setx ANTHROPIC_WORKSPACE_ID "wrkspc_..."
 > ```
 
+### Usar DeepSeek en lugar de Claude
+
+La grabadora y el panel pueden usar DeepSeek (API compatible con OpenAI). Para la
+grabadora, en una terminal de Windows:
+
+```powershell
+setx AI_PROVIDER deepseek
+setx DEEPSEEK_API_KEY "sk-..."
+setx DEEPSEEK_MODEL "<ID del modelo>"
+```
+
+Para el panel, pon esas mismas variables en el archivo `.env` y reinicia con
+`docker compose up -d`. El ID exacto del modelo aparece en la lista de modelos de
+tu cuenta:
+
+```powershell
+curl.exe https://api.deepseek.com/models -H "Authorization: Bearer sk-..."
+```
+
+Con DeepSeek los PDF **escaneados** (texto como imagen) no se pueden leer, porque
+DeepSeek no lee PDF. Si además tienes `ANTHROPIC_API_KEY`, esos PDF se leen con
+Claude y todo lo demás va con DeepSeek. Para volver a Claude, pon
+`AI_PROVIDER=claude`.
+
 ### Notas por sistema operativo
 
 | Sistema | Captura del audio del sistema |
@@ -155,6 +179,8 @@ Variables de entorno opcionales:
 
 - `MEETING_RECORDER_DIR`: carpeta donde guardar las reuniones.
 - `MEETING_RECORDER_MODEL`: modelo de Claude por defecto.
+- `AI_PROVIDER`, `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`: para resumir con DeepSeek
+  (ver *Usar DeepSeek en lugar de Claude*).
 
 ## Consejos
 
@@ -229,7 +255,8 @@ Requisitos: [Docker Desktop](https://www.docker.com/products/docker-desktop/).
    notepad .env
    ```
 2. Rellena en `.env`:
-   - `ANTHROPIC_API_KEY`: tu clave de Claude.
+   - `ANTHROPIC_API_KEY`: tu clave de Claude, o bien `AI_PROVIDER=deepseek`,
+     `DEEPSEEK_API_KEY` y `DEEPSEEK_MODEL` para usar DeepSeek.
    - `REUNIONES_DIR`: la carpeta de la grabadora, con barras `/`
      (p. ej. `C:/Users/carlo/Reuniones`).
    - `OWNER_NAME` / `OWNER_ROLE`: tu nombre y perfil, para que la IA sepa quién graba.
@@ -391,7 +418,8 @@ TEST_DATABASE_URL=postgres://...  npm test  # los tests usan (y vacían) esa bas
 | Archivo | Responsabilidad |
 |---|---|
 | `web/src/lib/migrations.ts` | Esquema de PostgreSQL (se aplica solo al arrancar) |
-| `web/src/lib/analysis.ts` | Prompt y llamada a Claude con salida estructurada |
+| `web/src/lib/analysis.ts` | Prompt y llamada a la IA con salida estructurada |
+| `web/src/lib/deepseek.ts` | Proveedor DeepSeek (API compatible con OpenAI, modo JSON) |
 | `web/src/lib/tracking.ts` | Aplica el resultado de la IA a temas/tareas y registra el historial |
 | `web/src/lib/triage.ts` | Asignación automática de fuentes (grabaciones, correos, documentos) a proyectos |
 | `web/src/lib/sources.ts` | Carga de cualquier fuente como texto para la IA |

@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { BetaContentBlockParam } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { z } from "zod";
+import { ProviderError, aiProvider, askDeepSeek } from "./deepseek";
 import { TASK_STATUSES, TOPIC_STATUSES } from "./status";
 
 export const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5";
@@ -205,14 +206,29 @@ export function anthropicClient(): Anthropic {
   });
 }
 
-/** Llamada a Claude con salida estructurada validada contra un esquema Zod. */
+/** Llamada a la IA (Claude, o DeepSeek con AI_PROVIDER=deepseek) con salida estructurada validada con Zod. */
 export async function askStructured<S extends z.ZodType>(
   schema: S,
   system: string,
   user: string | BetaContentBlockParam[],
   opts: { effort?: "low" | "medium" | "high"; maxTokens?: number; client?: Anthropic } = {},
 ): Promise<z.infer<S>> {
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+  const hasClaude = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  if (aiProvider() === "deepseek" && !opts.client) {
+    if (typeof user === "string") {
+      try {
+        return await askDeepSeek(schema, system, user, { maxTokens: opts.maxTokens });
+      } catch (e) {
+        throw e instanceof ProviderError ? new AnalysisError(e.message) : e;
+      }
+    }
+    // DeepSeek no lee PDF: los escaneados solo se pueden leer con Claude.
+    if (!hasClaude) {
+      throw new AnalysisError("Este PDF es escaneado (texto como imagen) y DeepSeek no puede leerlo. Expórtalo con " +
+        "texto seleccionable o añade también ANTHROPIC_API_KEY para leerlo con Claude.");
+    }
+  }
+  if (!hasClaude) {
     throw new AnalysisError("Falta ANTHROPIC_API_KEY en el archivo .env");
   }
   const client = opts.client ?? anthropicClient();

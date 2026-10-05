@@ -1,12 +1,25 @@
-"""Resumen de la reunión con Claude (API de Anthropic)."""
+"""Resumen de la reunión con Claude (API de Anthropic) o, con AI_PROVIDER=deepseek, con DeepSeek."""
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.error
+import urllib.request
 
 import anthropic
 
-DEFAULT_MODEL = os.environ.get("MEETING_RECORDER_MODEL", "claude-opus-5")
+
+def provider() -> str:
+    """Proveedor de IA: ``claude`` (por defecto) o ``deepseek`` (variable AI_PROVIDER)."""
+    return "deepseek" if os.environ.get("AI_PROVIDER", "").strip().lower() == "deepseek" else "claude"
+
+
+DEFAULT_MODEL = (
+    os.environ.get("DEEPSEEK_MODEL", "")
+    if provider() == "deepseek"
+    else os.environ.get("MEETING_RECORDER_MODEL", "claude-opus-5")
+)
 
 SYSTEM_PROMPT = """\
 Eres un asistente experto en analizar reuniones de trabajo. Recibirás la \
@@ -66,6 +79,11 @@ def summarize(
     if not transcript.strip():
         raise SummaryError("La transcripción está vacía: no hay nada que resumir.")
 
+    system = SYSTEM_PROMPT.format(idioma=language, titulo=title)
+    user = f"<transcripcion>\n{transcript}\n</transcripcion>"
+    if client is None and provider() == "deepseek":
+        return _summarize_deepseek(system, user, model)
+
     client = client or make_client()
     # Streaming: las reuniones largas generan entradas grandes y evita timeouts.
     with client.beta.messages.stream(
@@ -77,13 +95,8 @@ def summarize(
         # la API la reintenta automáticamente con otro modelo.
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
-        system=SYSTEM_PROMPT.format(idioma=language, titulo=title),
-        messages=[
-            {
-                "role": "user",
-                "content": f"<transcripcion>\n{transcript}\n</transcripcion>",
-            }
-        ],
+        system=system,
+        messages=[{"role": "user", "content": user}],
     ) as stream:
         message = stream.get_final_message()
 
@@ -94,5 +107,48 @@ def summarize(
     if not text:
         raise SummaryError(f"Respuesta vacía del modelo (stop_reason={message.stop_reason}).")
     if message.stop_reason == "max_tokens":
+        text += "\n\n> ⚠️ El resumen se cortó por longitud."
+    return text + "\n"
+
+
+def _summarize_deepseek(system: str, user: str, model: str) -> str:
+    """Resumen con DeepSeek (API compatible con OpenAI), en streaming para evitar timeouts."""
+    key = os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        raise SummaryError("Falta la variable de entorno DEEPSEEK_API_KEY.")
+    model = model or os.environ.get("DEEPSEEK_MODEL", "")
+    if not model:
+        raise SummaryError("Falta la variable de entorno DEEPSEEK_MODEL (el ID del modelo de DeepSeek).")
+    base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+    body = {
+        "model": model,
+        "stream": True,
+        "max_tokens": int(os.environ.get("DEEPSEEK_MAX_TOKENS") or 32768),
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+    }
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    parts: list[str] = []
+    finish = None
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8").strip()
+                if not line.startswith("data:") or line == "data: [DONE]":
+                    continue
+                choice = (json.loads(line[5:]).get("choices") or [{}])[0]
+                parts.append((choice.get("delta") or {}).get("content") or "")
+                finish = choice.get("finish_reason") or finish
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:400]
+        raise SummaryError(f"DeepSeek respondió {e.code}: {detail}") from e
+
+    text = "".join(parts).strip()
+    if not text:
+        raise SummaryError(f"Respuesta vacía del modelo (finish_reason={finish}).")
+    if finish == "length":
         text += "\n\n> ⚠️ El resumen se cortó por longitud."
     return text + "\n"

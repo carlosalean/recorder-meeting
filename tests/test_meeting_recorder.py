@@ -174,3 +174,41 @@ def test_make_client_sends_workspace_header(monkeypatch):
     assert summarize.make_client().default_headers["anthropic-workspace-id"] == "wrkspc_123"
     monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID")
     assert "anthropic-workspace-id" not in summarize.make_client().default_headers
+
+
+def test_summarize_with_deepseek(monkeypatch):
+    import http.server
+    import json
+    import threading
+
+    seen = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen["auth"] = self.headers["Authorization"]
+            seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for piece in ["# Res", "umen"]:
+                chunk = {"choices": [{"delta": {"content": piece}, "finish_reason": None}]}
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self.wfile.write(b'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}\n\ndata: [DONE]\n\n')
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("AI_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-ds")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", f"http://127.0.0.1:{server.server_port}")
+    try:
+        out = summarize.summarize("[00:00:01] Hola", title="Demo", model="modelo-x")
+    finally:
+        server.shutdown()
+    assert out == "# Resumen\n"
+    assert seen["auth"] == "Bearer sk-ds"
+    assert seen["body"]["model"] == "modelo-x"
+    assert "# Demo" in seen["body"]["messages"][0]["content"]
+    assert "[00:00:01] Hola" in seen["body"]["messages"][1]["content"]

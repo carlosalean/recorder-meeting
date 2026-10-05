@@ -53,7 +53,7 @@ def _run_process(path: Path, args: argparse.Namespace) -> int:
     except summ.SummaryError as e:
         print(f"Error al resumir: {e}", file=sys.stderr)
         return 1
-    except Exception as e:  # p. ej. falta ANTHROPIC_API_KEY o no hay red
+    except Exception as e:  # p. ej. falta la clave de la API o no hay red
         print(f"Error: {e}\nPuedes reintentar con: meeting-recorder procesar \"{path}\"",
               file=sys.stderr)
         return 1
